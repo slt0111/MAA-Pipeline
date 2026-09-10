@@ -335,13 +335,23 @@ function buildCfg(cs, schedule, notify){
     field("设备索引","c-vm","number",cs.vm_index) +
     field("ADB 地址（留空自动推导）","c-adbaddr","text",cs.adb_address) +
     field("就绪超时（秒）","c-timeout","number",cs.ready_timeout) +
-    '<div class="field"><label>跑完自动关模拟器</label><div class="row" style="padding:6px 0">' +
-      '<input type="checkbox" id="c-shutdown"' + (cs.shutdown_after_complete ? " checked" : "") +
-      '><span>任务完成后关闭模拟器</span></div></div>';
+    '<div class="field"><label>任务完成后</label>' +
+      '<div class="row" style="padding:6px 0">' +
+        '<input type="checkbox" id="c-shutdown"' + (cs.shutdown_after_complete ? " checked" : "") +
+        '><span>关闭模拟器实例</span></div>' +
+      '<div class="row" style="padding:2px 0">' +
+        '<input type="checkbox" id="c-closemgr"' + (cs.close_manager ? " checked" : "") +
+        '><span>连同 MuMu 管理器窗口一起关闭</span></div>' +
+    '</div>';
 
   html += '<div class="sect">MAA</div>' +
     field("MAA 主程序路径","c-maa","text",cs.maa_exe) +
-    field("挂机配置名","c-profile","text",cs.maa_profile);
+    field("挂机配置名","c-profile","text",cs.maa_profile) +
+    '<div class="field"><label>完成后自动关闭 MAA</label>' +
+      '<div class="row" style="padding:6px 0">' +
+        '<input type="checkbox" id="c-maaclose"' + (cs.maa_close_after_complete ? " checked" : "") +
+        '><span>MAA 报「任务已全部完成」后自动关闭窗口</span></div></div>' +
+    field("关闭延迟（秒）","c-maadelay","number",cs.maa_close_delay);
 
   html += '<div class="sect">定时挂机</div>' +
     '<div class="field"><label>启用定时</label><div class="row" style="padding:6px 0">' +
@@ -422,9 +432,15 @@ function collectCfg(){
       vm_index: Number($("c-vm").value || 0),
       adb_address: $("c-adbaddr").value.trim(),
       ready_timeout: Number($("c-timeout").value || 180),
-      shutdown_after_complete: $("c-shutdown").checked
+      shutdown_after_complete: $("c-shutdown").checked,
+      close_manager: $("c-closemgr").checked
     },
-    maa:{ exe: $("c-maa").value.trim(), profile: $("c-profile").value.trim() },
+    maa:{
+      exe: $("c-maa").value.trim(),
+      profile: $("c-profile").value.trim(),
+      close_after_complete: $("c-maaclose").checked,
+      close_delay: Number($("c-maadelay").value || 10)
+    },
     schedule:{
       enabled: $("c-sch-on").checked,
       times: times,

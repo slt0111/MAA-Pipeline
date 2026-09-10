@@ -93,12 +93,15 @@ DEFAULT_CONFIG = {
         "ready_timeout": 180,
         "poll_interval": 3,
         "shutdown_after_complete": True,
+        "close_manager": True,
     },
     "maa": {
         "exe": os.path.join(APP_DIR, "MAA", "MAA.exe"),
         "profile": "挂机流水线",
         "start_timeout": 150,
         "mirror_logs": True,
+        "close_after_complete": True,
+        "close_delay": 10,
     },
     "server": {"port": 17800, "open_browser": True, "window_mode": "auto"},
     # times 为空时回退到老的单个 time 字段，保证老配置不丢设置
@@ -458,6 +461,39 @@ def mumu_control(cfg: Config, action: str):
     return rc, (out + err).strip()
 
 
+def mumu_main(action: str, cli: str):
+    """控制 MuMu 管理器本体（main close / main launch）。"""
+    rc, out, err = run_cmd([cli, "main", action], timeout=60)
+    return rc, (out + err).strip()
+
+
+def post_close_to_pid(pid: int) -> int:
+    """给指定进程的所有顶层窗口发 WM_CLOSE，让它自己走正常退出流程。
+
+    比直接 terminate() 温和：程序有机会保存配置、清理临时文件。
+    返回成功投递的窗口数量。
+    """
+    user32 = ctypes.windll.user32
+    WM_CLOSE = 0x0010
+    count = 0
+
+    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    def _enum(hwnd, _lparam):
+        nonlocal count
+        wpid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+        if wpid.value == pid:
+            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            count += 1
+        return True
+
+    try:
+        user32.EnumWindows(_enum, 0)
+    except Exception:
+        pass
+    return count
+
+
 # ============================================================ MAA 控制
 
 
@@ -589,8 +625,11 @@ class Engine:
             "adb_address": self.cfg.adb_address,
             "ready_timeout": self.cfg.get("mumu", "ready_timeout", default=180),
             "shutdown_after_complete": self.cfg.get("mumu", "shutdown_after_complete", default=True),
+            "close_manager": self.cfg.get("mumu", "close_manager", default=True),
             "maa_exe": self.cfg.maa_exe,
             "maa_profile": self.cfg.get("maa", "profile", default=""),
+            "maa_close_after_complete": self.cfg.get("maa", "close_after_complete", default=True),
+            "maa_close_delay": self.cfg.get("maa", "close_delay", default=10),
             "schedule": normalized_schedule(self.cfg),
             "notify": normalized_notify(self.cfg),
             "notify_desktop": self.cfg.get("notify", "desktop", default=True),
@@ -877,22 +916,64 @@ class Engine:
         self._end_phase("maa")
         self._monitor_maa()
 
+    def _close_maa(self, reason: str):
+        """关闭 MAA：先请窗口自己退出，超时再终止，最后强杀。"""
+        proc = self.maa_proc
+        if proc is None or proc.poll() is not None:
+            return
+        self.log("warn", "正在关闭 MAA（%s）…" % reason)
+        try:
+            post_close_to_pid(proc.pid)
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=8)
+            self.log("info", "MAA 已正常退出")
+            return
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
+            self.log("info", "MAA 已终止")
+            return
+        except Exception:
+            pass
+        try:
+            proc.kill()
+            self.log("warn", "MAA 未响应，已强制结束")
+        except Exception:
+            pass
+
     def _monitor_maa(self):
         self.log("info", "进入挂机监控，可随时点「中止」停止")
+        auto_close = bool(self.cfg.get("maa", "close_after_complete", default=True))
+        try:
+            delay = max(0, int(self.cfg.get("maa", "close_delay", default=10) or 0))
+        except Exception:
+            delay = 10
+
+        done_at = None
         while not self.stop_evt.is_set():
             if self.maa_proc is None or self.maa_proc.poll() is not None:
                 break
-            time.sleep(1)
+            # 关键：MAA 报「任务已全部完成」后 GUI 进程并不会自己退出。
+            # 必须在这里主动收尾，否则会一直空转等进程退出（旧版本即如此，
+            # 表现为任务跑完但迟迟不关 MAA / 模拟器，只能手动点「中止」）。
+            if self._completed:
+                if done_at is None:
+                    done_at = time.time()
+                    if auto_close:
+                        self.log("ok", "任务已全部完成，%d 秒后自动关闭 MAA 并收尾" % delay)
+                    else:
+                        self.log("info", "任务已全部完成（按配置保留 MAA 运行）")
+                elif auto_close and time.time() - done_at >= delay:
+                    self._close_maa("任务已全部完成")
+                    break
+            time.sleep(0.5)
+
         if self.stop_evt.is_set() and self.maa_proc and self.maa_proc.poll() is None:
-            self.log("warn", "正在关闭 MAA 进程…")
-            try:
-                self.maa_proc.terminate()
-                self.maa_proc.wait(timeout=15)
-            except Exception:
-                try:
-                    self.maa_proc.kill()
-                except Exception:
-                    pass
+            self._close_maa("收到中止请求")
         time.sleep(1.5)  # 给日志线程一点时间收尾
         self._set(maa="已退出")
 
@@ -910,16 +991,39 @@ class Engine:
             if self.cfg.get("mumu", "shutdown_after_complete", default=True):
                 self.log("info", "正在关闭模拟器…")
                 rc, out = mumu_control(self.cfg, "shutdown")
-                if rc == 0:
+                if rc == 0 and self._wait_mumu_stopped():
                     self.log("ok", "模拟器已关闭")
                     self._set(mumu="已关闭")
+                elif rc == 0:
+                    self.log("warn", "关闭指令已发送，但实例仍在运行，请手动确认")
                 else:
                     self.log("warn", "关闭模拟器失败：%s" % (out or "退出码 %s" % rc))
+
+                if self.cfg.get("mumu", "close_manager", default=True):
+                    cli = self.cfg.get("mumu", "cli", default="")
+                    rc, out = mumu_main("close", cli)
+                    if rc == 0:
+                        self.log("ok", "MuMu 管理器已关闭")
+                    else:
+                        self.log("info", "MuMu 管理器未能关闭：%s" % (out or "退出码 %s" % rc))
             else:
                 self.log("info", "按配置保留模拟器运行")
         else:
             self.log("warn", "未检测到「任务已全部完成」，保留模拟器运行以避免误关")
         self._end_phase("wrap")
+
+    def _wait_mumu_stopped(self, timeout=25):
+        """关闭指令是异步的，确认实例进程真的退出了再往下走。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                info = mumu_info(self.cfg)
+            except Exception:
+                return False
+            if not info.get("is_process_started"):
+                return True
+            time.sleep(1.5)
+        return False
 
     # ---------------- MAA 日志镜像 ----------------
 

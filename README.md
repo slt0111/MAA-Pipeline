@@ -95,8 +95,8 @@ python build_installer.py --with-maa    # 完整版安装包（内置 MAA）
 | `launch` | `mumu-cli control launch` 启动指定实例 | ✅ |
 | `ready` | 轮询 `is_android_started`，最长等待 180 秒，再用 `adb` 校验 `sys.boot_completed=1` | ✅ |
 | `adb` | 确认 `127.0.0.1:16384`（= `16384 + 32 × 实例号`）通路正常 | ✅ |
-| `maa` | 以 `MAA.exe --config 挂机流水线` 启动，实时镜像 `debug\asst.log` 到界面 | ✅ |
-| `wrap` | 归档日志；确认 MAA 报「任务已全部完成」后按设置关闭模拟器 | — |
+| `maa` | 以 `MAA.exe --config 挂机流水线` 启动，实时镜像 `debug\asst.log` 到界面；一旦日志出现「任务已全部完成」，等待「关闭延迟」秒后自动关掉 MAA | ✅ |
+| `wrap` | 归档日志；确认 MAA 报「任务已全部完成」后按设置关闭模拟器实例（可选连 MuMu 管理器一起关） | — |
 
 ### 为什么不用改你的 MAA 配置
 
@@ -122,12 +122,15 @@ python build_installer.py --with-maa    # 完整版安装包（内置 MAA）
     "adb": "...\\nx_main\\adb.exe",
     "vm_index": 0,                          // 实例序号，0 开始
     "ready_timeout": 180,                   // 等待安卓就绪最长时间（秒）
-    "shutdown_after_complete": true         // 挂机完成后关模拟器
+    "shutdown_after_complete": true,        // 挂机完成后关模拟器实例
+    "close_manager": true                   // 连 MuMu 管理器窗口一起关掉
   },
   "maa": {
     "exe": "...\\MAA\\MAA.exe",
     "profile": "挂机流水线",                 // 运行时注入的配置名
-    "mirror_logs": true                     // 把 MAA 日志镜像到界面
+    "mirror_logs": true,                    // 把 MAA 日志镜像到界面
+    "close_after_complete": true,           // 报「任务已全部完成」后自动关掉 MAA
+    "close_delay": 10                       // 关闭前的宽限秒数
   },
   "schedule": {
     "enabled": true,

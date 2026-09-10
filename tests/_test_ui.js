@@ -12,7 +12,9 @@ const SAMPLE = {
   phases: {},
   config_summary: {
     vm_index: 0, adb_address: "", ready_timeout: 180, shutdown_after_complete: true,
+    close_manager: true,
     maa_exe: "C:\\MAA\\MAA.exe", maa_profile: "挂机流水线",
+    maa_close_after_complete: true, maa_close_delay: 10,
     schedule: { enabled: true, times: ["08:00", "20:00"], days: [0, 1, 2, 3, 4, 5], only_if_idle: true },
     notify: {
       desktop: true,
@@ -96,6 +98,9 @@ setTimeout(() => {
   ok(out.notify.email.smtp_port === 465 && out.notify.email.use_ssl === true, "邮件端口与加密方式");
   ok(out.notify.qmsg.type === "group" && out.notify.webhook.format === "通用 JSON", "下拉字段收集正确");
   ok(out.notify.webhook.url === "" && out.notify.webhook.enabled === false, "未启用通道保持关闭");
+  ok(out.mumu.close_manager === true, "关闭 MuMu 管理器开关收集正确");
+  ok(out.maa.close_after_complete === true && out.maa.close_delay === 10,
+     "MAA 完成后自动关闭与其延迟收集正确", out.maa);
 
   console.log("=== 5. 往返一致性：收集 → 回填 → 再收集 ===");
   const round = JSON.parse(JSON.stringify(out));
@@ -103,8 +108,11 @@ setTimeout(() => {
   round.adb_address = out.mumu.adb_address;
   round.ready_timeout = out.mumu.ready_timeout;
   round.shutdown_after_complete = out.mumu.shutdown_after_complete;
+  round.close_manager = out.mumu.close_manager;
   round.maa_exe = out.maa.exe;
   round.maa_profile = out.maa.profile;
+  round.maa_close_after_complete = out.maa.close_after_complete;
+  round.maa_close_delay = out.maa.close_delay;
   win.buildCfg(round, out.schedule, out.notify);
   const again = win.collectCfg();
   const same = JSON.stringify(again) === JSON.stringify(out);

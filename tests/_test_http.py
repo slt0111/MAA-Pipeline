@@ -1,12 +1,17 @@
+"""端到端联调：通过 HTTP 接口验证多时间点保存/回读、通知测试接口。
 
-import os
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-"""端到端联调：通过 HTTP 接口验证多时间点保存/回读、通知测试接口。"""
+前置：程序已经在运行（本脚本直接连 127.0.0.1:17800，自己不起服务）。
+注意：会临时改写真实的 schedule 配置，脚本结束时会还原成测试前的样子，
+      所以不要拿它去测一个你正在用的实例的同时又期待配置不变。
+"""
 import json
+import os
+import sys
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = "http://127.0.0.1:17800"
 RECEIVED = []
 
@@ -42,9 +47,21 @@ def post(path, body):
         return json.loads(resp.read().decode("utf-8"))
 
 
+print("=== 0. 连通性 ===")
+try:
+    get("/api/state")
+    print("  已连上运行中的实例 %s" % BASE)
+except Exception as exc:
+    print("  [跳过] 无法连接 %s：%s" % (BASE, exc))
+    print("  请先启动「MAA 挂机助手」再跑本测试。")
+    srv.shutdown()
+    sys.exit(0)
+
+print()
 print("=== 1. 当前状态里的定时与通知结构 ===")
 state = get("/api/state")
 cs = state["config_summary"]
+ORIGINAL = dict(cs["schedule"])          # 结束时还原，避免污染使用者的真实设置
 print("  schedule:", json.dumps(cs["schedule"], ensure_ascii=False))
 print("  notify 通道:", sorted(cs["notify"].keys()))
 print("  next_schedule:", state["next_schedule"])
@@ -80,11 +97,17 @@ print("  times=%s time=%r（老字段应同步清空）" % (stored.get("times"),
 print("  next_schedule:", repr(get("/api/state")["next_schedule"]))
 
 print()
-print("=== 5. 恢复为单个 08:00 ===")
-print(" ", post("/api/config", {"config": {"schedule": {
-    "enabled": True, "times": ["08:00"], "time": "08:00",
-    "days": days, "only_if_idle": True}}})["msg"])
+print("=== 5. 还原为测试前的定时设置 ===")
+restore_times = list(ORIGINAL.get("times") or [])
+post("/api/config", {"config": {"schedule": {
+    "enabled": bool(ORIGINAL.get("enabled", True)),
+    "times": restore_times,
+    "time": restore_times[0] if restore_times else "",
+    "days": list(ORIGINAL.get("days") or days),
+    "only_if_idle": bool(ORIGINAL.get("only_if_idle", True))}}})
 state = get("/api/state")
-print("  当前:", json.dumps(state["config_summary"]["schedule"], ensure_ascii=False))
+now = state["config_summary"]["schedule"]
+print("  当前:", json.dumps(now, ensure_ascii=False))
+print("  与测试前一致:", json.dumps(now, sort_keys=True) == json.dumps(ORIGINAL, sort_keys=True))
 print("  下次触发:", state["next_schedule"])
 srv.shutdown()
