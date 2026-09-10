@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MAA 挂机助手 · 安装向导</title>
+<style>
+  :root{
+    --bg:#F7F7F5; --card:#FFFFFF; --ink:#2B2F33; --sub:#7A8288;
+    --brand:#185FA5; --brand2:#0F6E56; --line:#E6E4DF; --warnbg:#FFF7E8; --warnink:#8A5B00;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;
+    background:var(--bg); color:var(--ink); height:100vh;
+    display:flex; flex-direction:column; user-select:none; overflow:hidden;
+  }
+  header{
+    padding:22px 28px 18px;
+    background:linear-gradient(135deg,var(--brand) 0%,var(--brand2) 100%);
+    color:#fff; display:flex; align-items:center; gap:14px;
+  }
+  header .logo{
+    width:44px;height:44px;border-radius:12px;flex:none;
+    background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;
+  }
+  header h1{font-size:17px;font-weight:600;}
+  header p{font-size:12px;opacity:.85;margin-top:2px;}
+  main{flex:1;overflow-y:auto;padding:22px 28px;}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin-bottom:14px;
+  }
+  .card h2{font-size:13px;color:var(--sub);font-weight:600;margin-bottom:10px;letter-spacing:.04em;}
+  .row{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px;}
+  .row .grow{flex:1;}
+  .tag{font-size:12px;padding:2px 10px;border-radius:99px;font-weight:600;}
+  .tag.ok{background:#E7F5EE;color:#0F6E56;}
+  .tag.bad{background:#FDECEC;color:#B42318;}
+  .tag.info{background:#EAF2FB;color:#185FA5;}
+  .hint{font-size:12px;color:var(--sub);line-height:1.7;}
+  .hint a{color:var(--brand);}
+  .dirrow{display:flex;gap:8px;}
+  .dirrow input{
+    flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 12px;
+    font-size:13px;color:var(--ink);background:#FBFBFA;outline:none;
+  }
+  .dirrow input:focus{border-color:var(--brand);}
+  button{
+    border:none;border-radius:8px;cursor:pointer;font-size:13px;
+    padding:9px 18px;font-family:inherit;
+  }
+  button.primary{
+    background:linear-gradient(135deg,var(--brand),var(--brand2));
+    color:#fff;font-weight:600;
+  }
+  button.primary:disabled{opacity:.45;cursor:default;}
+  button.ghost{background:#EFEDE8;color:var(--ink);}
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin:6px 0;}
+  .check input{width:15px;height:15px;accent-color:var(--brand);}
+  footer{
+    padding:14px 28px;border-top:1px solid var(--line);
+    display:flex;align-items:center;gap:10px;background:var(--card);
+  }
+  footer .grow{flex:1;}
+  #progresswrap{display:none;}
+  .bar{height:10px;border-radius:99px;background:#ECEAE5;overflow:hidden;margin:14px 0 8px;}
+  .bar i{
+    display:block;height:100%;width:0%;
+    background:linear-gradient(90deg,var(--brand),var(--brand2));
+    border-radius:99px;transition:width .25s;
+  }
+  #done{display:none;text-align:center;padding:40px 0;}
+  #done .big{font-size:40px;margin-bottom:12px;}
+  #done h3{font-size:16px;margin-bottom:8px;}
+  #err{display:none;}
+  .errbox{
+    background:#FDECEC;color:#B42318;border-radius:10px;padding:14px 16px;
+    font-size:13px;line-height:1.6;word-break:break-all;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg width="26" height="26" viewBox="0 0 680 680">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#185FA5"/><stop offset="1" stop-color="#0F6E56"/>
+      </linearGradient></defs>
+      <rect x="20" y="20" width="640" height="640" rx="150" fill="url(#g)"/>
+      <polygon fill="#fff" points="418,37 167,370 309,370 261,642 513,302 370,302"/>
+    </svg>
+  </div>
+  <div>
+    <h1>MAA 挂机助手</h1>
+    <p>启动模拟器 → 等待安卓就绪 → 拉起 MAA 自动挂机</p>
+  </div>
+</header>
+
+<main>
+  <!-- 安装页 -->
+  <div id="setup">
+    <div class="card">
+      <h2>环境检测</h2>
+      <div class="row">
+        <span class="grow">MAA 本体（明日方舟助手）</span>
+        <span id="maaTag" class="tag info">…</span>
+      </div>
+      <div class="row">
+        <span class="grow">MuMu 模拟器</span>
+        <span id="mumuTag" class="tag info">检测中…</span>
+      </div>
+      <div class="row">
+        <span class="grow">WebView2 运行时（界面渲染）</span>
+        <span id="wvTag" class="tag info">检测中…</span>
+      </div>
+      <p id="envHint" class="hint" style="margin-top:8px;"></p>
+    </div>
+
+    <div class="card">
+      <h2>安装位置</h2>
+      <div class="dirrow">
+        <input id="dir" spellcheck="false">
+        <button class="ghost" onclick="pickDir()">浏览…</button>
+      </div>
+      <p class="hint" style="margin-top:8px;">默认装到当前用户目录，不需要管理员权限。</p>
+    </div>
+
+    <div class="card">
+      <h2>附加选项</h2>
+      <label class="check"><input type="checkbox" id="optDesktop" checked> 创建桌面快捷方式</label>
+      <label class="check"><input type="checkbox" id="optMenu" checked> 创建开始菜单快捷方式</label>
+      <label class="check"><input type="checkbox" id="optLaunch" checked> 安装完成后立即启动</label>
+    </div>
+  </div>
+
+  <!-- 进度页 -->
+  <div id="progresswrap">
+    <div class="card" style="padding:28px;">
+      <h2>正在安装</h2>
+      <div class="bar"><i id="bar"></i></div>
+      <p id="progressmsg" class="hint">准备中…</p>
+    </div>
+  </div>
+
+  <!-- 完成页 -->
+  <div id="done">
+    <div class="big">✅</div>
+    <h3>安装完成</h3>
+    <p id="doneDir" class="hint"></p>
+  </div>
+
+  <!-- 错误页 -->
+  <div id="err">
+    <div class="errbox" id="errmsg"></div>
+  </div>
+</main>
+
+<footer>
+  <span id="footHint" class="hint grow"></span>
+  <button id="btnGo" class="primary" onclick="startInstall()">开始安装</button>
+</footer>
+
+<script>
+let STATE = null;
+function $(id){ return document.getElementById(id); }
+
+function init(){
+  pywebview.api.get_state().then(showState);
+}
+
+function showState(s){
+  STATE = s;
+  $("dir").value = s.default_dir;
+
+  const maa = $("maaTag");
+  if (!s.has_payload){
+    maa.textContent = "数据缺失"; maa.className = "tag bad";
+    $("footHint").textContent = "这个安装包数据不完整，请重新打包。";
+    $("btnGo").disabled = true;
+  } else if (s.payload_has_maa){
+    maa.textContent = "随包安装（" + s.payload_mb + " MB）"; maa.className = "tag ok";
+  } else {
+    maa.textContent = "不含（首次运行自动探测）"; maa.className = "tag info";
+  }
+
+  const mumu = $("mumuTag");
+  if (s.mumu){
+    mumu.textContent = "已安装"; mumu.className = "tag ok";
+    mumu.title = s.mumu;
+  } else {
+    mumu.textContent = "未检测到"; mumu.className = "tag bad";
+  }
+
+  const wv = $("wvTag");
+  if (s.webview2){ wv.textContent = "已安装"; wv.className = "tag ok"; }
+  else { wv.textContent = "未安装"; wv.className = "tag bad"; }
+
+  const hints = [];
+  if (!s.mumu)
+    hints.push('· 未检测到 MuMu 模拟器：主程序仍可安装，但挂机前需要先安装 MuMu（<a href="#" onclick="openMumu();return false;">前往官网下载</a>）。');
+  if (!s.webview2)
+    hints.push('· 未安装 WebView2：主程序会自动改用浏览器打开界面，不影响挂机；也可以<a href="#" onclick="openWv2();return false;">安装 WebView2</a> 获得原生窗口体验。');
+  if (s.has_payload && !s.payload_has_maa)
+    hints.push('· 本安装包不含 MAA 本体：主程序首次运行会自动探测已装的 MAA；如果另一台电脑上没有，请从 MAA 官方发布页下载，或改用完整版安装包。');
+  $("envHint").innerHTML = hints.join('<br>');
+  $("footHint").textContent = "版本 1.2.0 · 安装约需 " + (s.payload_has_maa ? "1-3 分钟" : "几秒钟");
+}
+
+function pickDir(){
+  pywebview.api.pick_dir().then(function(d){ if (d) $("dir").value = d; });
+}
+
+function openMumu(){ window.location.href = "https://mumu.163.com/"; }
+function openWv2(){ window.location.href = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"; }
+
+function startInstall(){
+  $("btnGo").disabled = true;
+  $("setup").style.display = "none";
+  $("progresswrap").style.display = "block";
+  pywebview.api.install($("dir").value,
+    $("optDesktop").checked, $("optMenu").checked, $("optLaunch").checked);
+  poll();
+}
+
+function poll(){
+  pywebview.api.get_progress().then(function(p){
+    $("bar").style.width = p.pct + "%";
+    $("progressmsg").textContent = p.msg || "";
+    if (p.phase === "done"){
+      $("progresswrap").style.display = "none";
+      $("done").style.display = "block";
+      $("doneDir").textContent = "安装位置：" + ($("dir").value);
+      $("footHint").textContent = "可以关闭本窗口了。";
+      return;
+    }
+    if (p.phase === "error"){
+      $("progresswrap").style.display = "none";
+      $("err").style.display = "block";
+      $("errmsg").textContent = "安装失败：" + p.error;
+      $("footHint").textContent = "";
+      $("btnGo").disabled = false;
+      return;
+    }
+    setTimeout(poll, 300);
+  });
+}
+
+if (window.pywebview && pywebview.api){ init(); }
+else { window.addEventListener("pywebviewready", init); }
+</script>
+</body>
+</html>

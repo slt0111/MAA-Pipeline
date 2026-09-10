@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="LcuFtCnnnJ6BEBCXReSBtX">
+<head data-page-node-id="876hyIRObI3bjOiY4yx7NK">
+<meta charset="utf-8" data-page-node-id="bx8Oj59deG7WTjHrWEePRM">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="2ADIfaKJrsagLfC1cEQZiR">
+<title>MAA 一键挂机</title>
+<style>
+  :root{
+    --bg:#F5F4F0; --card:#FFFFFF; --soft:#F1EFE8;
+    --text:#2C2C2A; --text2:#5F5E5A; --text3:#888780;
+    --line:rgba(0,0,0,.12); --line2:rgba(0,0,0,.06);
+    --blue:#185FA5; --blue-bg:#E6F1FB; --blue-line:#B5D4F4;
+    --green:#0F6E56; --green-bg:#E1F5EE;
+    --amber:#854F0B; --amber-bg:#FAEEDA;
+    --red:#A32D2D; --red-bg:#FCEBEB;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;font-size:13px}
+  .wrap{max-width:1020px;margin:0 auto;padding:22px 20px 48px}
+  .card{background:var(--card);border:1px solid var(--line2);border-radius:var(--radius)}
+
+  header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+  h1{font-size:16px;font-weight:500;margin:0}
+  .sub{color:var(--text3);font-size:12px;margin:3px 0 0}
+  .headright{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text2)}
+  .pill{padding:3px 11px;border-radius:999px;background:var(--soft);color:var(--text2);font-weight:500}
+  .pill.run{background:var(--blue-bg);color:var(--blue)}
+  .pill.ok{background:var(--green-bg);color:var(--green)}
+  .pill.bad{background:var(--red-bg);color:var(--red)}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:1px}
+  .d-idle{background:#B4B2A9}.d-run{background:#378ADD}.d-ok{background:#1D9E75}
+  .d-warn{background:#EF9F27}.d-bad{background:#E24B4A}
+
+  .steps{display:flex;gap:6px;margin-bottom:8px}
+  .steps div{flex:1;height:4px;border-radius:2px;background:#E4E2DA;transition:background .25s}
+  .steps div.done{background:var(--green)}
+  .steps div.active{background:var(--blue)}
+  .steps div.failed{background:#E24B4A}
+  .steplabel{display:flex;gap:6px;margin-bottom:20px}
+  .steplabel span{flex:1;font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .steplabel span.active{color:var(--blue);font-weight:500}
+  .steplabel span.done{color:var(--text2)}
+
+  .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .metric{background:var(--card);border:1px solid var(--line2);border-radius:10px;padding:12px 14px}
+  .metric p{margin:0}
+  .metric .k{font-size:12px;color:var(--text3)}
+  .metric .v{font-size:14px;font-weight:500;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  button{font-family:inherit;font-size:13px;padding:7px 15px;border-radius:9px;cursor:pointer;
+    border:1px solid var(--line);background:var(--card);color:var(--text);transition:.15s}
+  button:hover{border-color:rgba(0,0,0,.3)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--blue-bg);border-color:var(--blue-line);color:var(--blue);font-weight:500}
+  button.danger{color:var(--red)}
+  button.ghost{border-color:transparent;color:var(--text2)}
+
+  .panel{background:var(--card);border:1px solid var(--line2);border-radius:var(--radius);overflow:hidden;margin-bottom:16px}
+  .panelhead{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:9px 14px;background:var(--soft);border-bottom:1px solid var(--line2);font-size:12px;color:var(--text2)}
+  .panelhead .tools{display:flex;align-items:center;gap:10px}
+  .panelhead label{display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--text2)}
+
+  #log{height:330px;overflow:auto;padding:10px 14px;font-family:Consolas,"Courier New",monospace;
+    font-size:12.5px;line-height:1.72;background:var(--card)}
+  #log div{white-space:pre-wrap;word-break:break-all}
+  .t{color:var(--text3)}
+  .lv{display:inline-block;width:52px;font-weight:500}
+  .l-info{color:var(--text2)} .l-ok{color:var(--green)} .l-warn{color:var(--amber)}
+  .l-error{color:var(--red)} .l-phase{color:var(--blue)}
+  .l-info .lv,.l-ok .lv,.l-warn .lv,.l-error .lv,.l-phase .lv{color:inherit}
+
+  .cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:14px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:12px;color:var(--text2)}
+  input[type=text],input[type=number],input[type=time],input[type=password],select{
+    font-family:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line);
+    border-radius:8px;background:#fff;color:var(--text);width:100%}
+  input[readonly]{background:var(--soft);color:var(--text3)}
+  .days{display:flex;gap:4px;flex-wrap:wrap}
+  .days label{display:flex;align-items:center;gap:3px;font-size:12px;color:var(--text2);
+    border:1px solid var(--line);border-radius:7px;padding:3px 8px;cursor:pointer}
+  .sect{font-size:12px;font-weight:500;color:var(--text2);margin:2px 0 0;
+    grid-column:1/-1;padding-top:8px;border-top:1px solid var(--line2)}
+  .row{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2)}
+  .timelist{display:flex;flex-wrap:wrap;gap:8px}
+  .timerow{display:flex;align-items:center;gap:3px;background:var(--soft);
+    border:1px solid var(--line2);border-radius:9px;padding:2px 3px 2px 6px}
+  .timerow input[type=time]{width:106px;border:none;background:transparent;padding:3px 2px;font-weight:500}
+  .timerow button{border:none;background:transparent;color:var(--text3);
+    padding:1px 7px;font-size:15px;line-height:1.3;border-radius:6px}
+  .timerow button:hover{color:var(--red);background:var(--red-bg)}
+  .chan{grid-column:1/-1;border:1px solid var(--line2);border-radius:10px;padding:10px 12px;background:#fff}
+  .chanhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .chanhead .chk{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--text);cursor:pointer}
+  .chanhead .hint{font-size:12px;color:var(--text3);flex:1;min-width:140px}
+  .chanbody{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;
+    margin-top:10px;padding-top:10px;border-top:1px dashed var(--line2)}
+  .chanbody.off{display:none}
+  .tag{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--text3)}
+  .tag.wx{background:var(--green-bg);color:var(--green)}
+  .tag.qq{background:var(--blue-bg);color:var(--blue)}
+  .toast{position:absolute;left:50%;transform:translateX(-50%);bottom:26px;background:#2C2C2A;color:#fff;
+    padding:9px 18px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none}
+  .toast.show{opacity:1}
+  @media(max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body data-page-node-id="kf6AhxevCJOTsQjYZ2NLWJ">
+<div class="wrap" data-page-node-id="YL36oQG3TrOVviobTpHLOH">
+
+  <header data-page-node-id="dFaKIgWCAs45dGGIPAdEUg">
+    <div data-page-node-id="JGXSm2X1YO67kIS9oQSeCL">
+      <h1 data-page-node-id="qQL76y8PTuMc5QlevBnY15">MAA 一键挂机</h1>
+      <p class="sub" id="subline" data-page-node-id="LFnh25Bf6I0RJ2IXxXwHS3">加载中…</p>
+    </div>
+    <div class="headright" data-page-node-id="cix3fJmzyzum0VbMFvvo4o">
+      <span class="pill" id="pill" data-page-node-id="W9CAZ3pkSTFj91FjF9bOhf"><span class="dot d-idle" data-page-node-id="nc0DISabXS8TlBlNCA4qC8"></span>空闲</span>
+      <span id="elapsed" data-page-node-id="jHskDoQj72mIPw5ohdywqY">已用 00:00</span>
+      <span id="lastrun" data-page-node-id="qt1MAuv6TjLhPD4D3nB8VB">上次：—</span>
+      <span id="conn" data-page-node-id="4d3dGi6Ysu0LvNZu01Eyjr">连接中…</span>
+    </div>
+  </header>
+
+  <div class="steps" id="steps" data-page-node-id="vM1F4hgW3HGDoBqIH3wq3D"></div>
+  <div class="steplabel" id="steplabel" data-page-node-id="IpZZQ8QiEoeQ7AKZl5XAds"></div>
+
+  <div class="grid" data-page-node-id="OVvUy7Gw4C8xocnAhWkd7X">
+    <div class="metric" data-page-node-id="T8UlXGXoBXL7x5eZDSM72Y"><p class="k" data-page-node-id="fultsOHRMmZzPeb16AFwgc">MuMu 模拟器</p><p class="v" id="m-mumu" data-page-node-id="A2888q5Ubl87CrhdAEicqa"><span class="dot d-idle" data-page-node-id="vH3BuNp4HQddsTuY9fg4Pj"></span>未知</p></div>
+    <div class="metric" data-page-node-id="WOhlRUH22zMJW290tSuMd1"><p class="k" data-page-node-id="C0BXHjq6KwRMM7SA8urbiE">ADB 连接</p><p class="v" id="m-adb" data-page-node-id="WCzaBBMn9axqfoHWGb5d9j"><span class="dot d-idle" data-page-node-id="kZjfCb7bkNWpUcyp1xkTwg"></span>未知</p></div>
+    <div class="metric" data-page-node-id="pxgdfSWTkOGoB4wJoEEesO"><p class="k" data-page-node-id="GbbGlecvWvAaY6dzgDsDmF">MAA 进程</p><p class="v" id="m-maa" data-page-node-id="BI6nZApgCJFBUNyb4V11kw"><span class="dot d-idle" data-page-node-id="rSfKGROuj0zDdiFNnqTfnK"></span>未运行</p></div>
+    <div class="metric" data-page-node-id="NUIkjvk6mMhKYIJ9dahks2"><p class="k" data-page-node-id="6dLU4LrTKfMAvXF0ECRXDF">当前任务</p><p class="v" id="m-task" data-page-node-id="NbA86ZVLYdp9pdTNPqHEnV">—</p></div>
+  </div>
+
+  <div class="actions" data-page-node-id="sajRwlsk4FDNjqxm4EuZWu">
+    <button class="primary" id="btn-run" data-page-node-id="gYa4IYM56tYD40uGW0EYiS">一键挂机</button>
+    <button class="danger" id="btn-abort" data-page-node-id="GhAh846ZglIFlVWUShPeKK">中止</button>
+    <button id="btn-emu" data-page-node-id="A1tFcz6hhLdEA5jjxs5QNM">仅启动模拟器</button>
+    <button id="btn-maa" data-page-node-id="Gd1hzsqoqugeO1fsA3uPoh">仅启动 MAA</button>
+    <button id="btn-logs" data-page-node-id="2hJPRRliFu0U05CGQF0Q3l">打开日志目录</button>
+    <button id="btn-export" data-page-node-id="J030uc7DruYOqvFpOs7HKs">导出日志</button>
+    <button class="ghost" id="btn-test" data-page-node-id="TirFNG7RsasguZ74bbFcDk">测试通知</button>
+    <button class="ghost" id="btn-quit" title="关闭程序，定时挂机与托盘都会一并停止">退出程序</button>
+  </div>
+
+  <div class="panel" data-page-node-id="H7Iuc4K8rnRrHKxPkpeHmU">
+    <div class="panelhead" data-page-node-id="LsaMApfZNywBoG3T9md1UW">
+      <span data-page-node-id="C0T263cNzwyzfr4a85HCdh">运行记录</span>
+      <span class="tools" data-page-node-id="dCKwIO1zlNjKd8Bp52iw7a">
+        <label data-page-node-id="INiF8FEEuxgOwIbDDpltD2"><input type="checkbox" id="autoscroll" checked data-page-node-id="E40tbMiSfvMZIIWa5RvF5t">自动滚动</label>
+        <label data-page-node-id="M89FHP4G3o64ObUldNZOhZ"><input type="checkbox" id="onlykey" data-page-node-id="AufVbOgArHSPPqHbHpbVXi">只看关键</label>
+        <button class="ghost" id="btn-clear" style="padding:2px 8px" data-page-node-id="AvGe0166voEhPrl1GELn1C">清空</button>
+      </span>
+    </div>
+    <div id="log" data-page-node-id="Dyc2Ssd5Ts1OThqf8CkntN"></div>
+  </div>
+
+  <div class="panel" data-page-node-id="AuzlIWBB8pqX4C18hr3NGd">
+    <div class="panelhead" data-page-node-id="hUK6crWToWgtAsXaOWR2Mq"><span data-page-node-id="8Wn9fwbSsttqpz03i4DwY0">配置</span><span class="tools" id="nextsched" data-page-node-id="nCBeqZ7pUzFNPFRtE3riXX"></span></div>
+    <div style="padding:14px" class="cfg" id="cfg" data-page-node-id="0CV0hud4jTg2LpUBb1bE9i"></div>
+    <div style="padding:0 14px 14px;display:flex;gap:8px" data-page-node-id="BacvQLQlQ2CXzoISqQZeI3">
+      <button class="primary" id="btn-save" data-page-node-id="l88x0z7yJeF48F53C58NwN">保存配置</button>
+      <button id="btn-reload" data-page-node-id="MgynGOeqYcHnfYR8wk2xE9">放弃修改</button>
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast" data-page-node-id="NPFDqCyutzhgVrMbyi8rEz"></div>
+
+<script>
+const PHASES = [["env","环境自检"],["launch","启动模拟器"],["ready","等待安卓就绪"],
+                ["adb","确认 ADB 通路"],["maa","拉起 MAA 挂机"],["wrap","收尾归档"]];
+const WEEK = ["周一","周二","周三","周四","周五","周六","周日"];
+
+const $ = id => document.getElementById(id);
+const logBox = $("log");
+let keep = [];
+
+function esc(s){return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+
+function toast(msg){
+  const el = $("toast");
+  el.textContent = msg; el.classList.add("show");
+  clearTimeout(el._t); el._t = setTimeout(()=>el.classList.remove("show"), 2200);
+}
+
+/* ---------- 阶段条 ---------- */
+PHASES.forEach(([k,label],i)=>{
+  const bar = document.createElement("div"); bar.id = "bar-"+k; $("steps").appendChild(bar);
+  const sp = document.createElement("span"); sp.id = "lb-"+k; sp.textContent = label;
+  $("steplabel").appendChild(sp);
+});
+
+/* ---------- 日志 ---------- */
+const LV = {info:"INFO",ok:"OK",warn:"WARN",error:"ERROR",phase:"STEP"};
+function addLog(level, msg, time){
+  const line = {level, msg, time: time || new Date().toTimeString().slice(0,8)};
+  keep.push(line);
+  if(keep.length > 1200) keep = keep.slice(-900);
+  if($("onlykey").checked && !["ok","warn","error","phase"].includes(level)) return;
+  render(line);
+}
+function render(line){
+  const d = document.createElement("div");
+  d.className = "l-" + line.level;
+  d.innerHTML = '<span class="t">[' + line.time + ']</span> ' +
+                '<span class="lv">' + (LV[line.level]||"INFO") + '</span>' + esc(line.msg);
+  logBox.appendChild(d);
+  while(logBox.childNodes.length > 1200) logBox.removeChild(logBox.firstChild);
+  if($("autoscroll").checked) logBox.scrollTop = logBox.scrollHeight;
+}
+function rerenderLog(){
+  logBox.innerHTML = "";
+  keep.forEach(l=>{ if($("onlykey").checked && !["ok","warn","error","phase"].includes(l.level)) return; render(l); });
+}
+$("onlykey").onchange = rerenderLog;
+$("btn-clear").onclick = ()=>{ keep = []; logBox.innerHTML = ""; };
+
+/* ---------- 状态渲染 ---------- */
+const DOTS = {ok:"d-ok", bad:"d-bad", warn:"d-warn", run:"d-run", idle:"d-idle"};
+function dotClass(text){
+  if(/就绪|已连通|运行中|已关闭/.test(text)) return DOTS.ok;
+  if(/失败|错误/.test(text)) return DOTS.bad;
+  if(/启动中|检查中/.test(text)) return DOTS.run;
+  if(/退出/.test(text)) return DOTS.warn;
+  return DOTS.idle;
+}
+function setMetric(id, text){
+  $(id).innerHTML = '<span class="dot ' + dotClass(text) + '"></span>' + esc(text);
+}
+function fmt(sec){
+  sec = Math.max(0, sec|0);
+  const m = String(Math.floor(sec/60)).padStart(2,"0"), s = String(sec%60).padStart(2,"0");
+  return m + ":" + s;
+}
+
+function renderState(s){
+  PHASES.forEach(([k])=>{
+    const st = (s.phases||{})[k] || "pending";
+    const bar = $("bar-"+k), lb = $("lb-"+k);
+    bar.className = ""; lb.className = "";
+    if(st === "done"){ bar.className = "done"; lb.className = "done"; }
+    else if(st === "active"){ bar.className = "active"; lb.className = "active"; }
+    else if(st === "failed"){ bar.className = "failed"; lb.className = "failed"; }
+    else if(st === "skipped"){ bar.style.opacity = .35; lb.style.opacity = .35; return; }
+    bar.style.opacity = 1; lb.style.opacity = 1;
+  });
+
+  const pill = $("pill");
+  if(s.running){
+    pill.className = "pill run";
+    pill.innerHTML = '<span class="dot d-run"></span>运行中';
+  } else if(s.last_result === "成功"){
+    pill.className = "pill ok";
+    pill.innerHTML = '<span class="dot d-ok"></span>上次成功';
+  } else if(s.last_result === "失败"){
+    pill.className = "pill bad";
+    pill.innerHTML = '<span class="dot d-bad"></span>上次失败';
+  } else {
+    pill.className = "pill";
+    pill.innerHTML = '<span class="dot d-idle"></span>空闲';
+  }
+
+  $("elapsed").textContent = "已用 " + fmt(s.elapsed);
+  $("lastrun").textContent = s.last_run ? ("上次：" + s.last_run + (s.last_result ? " " + s.last_result : "")) : "上次：—";
+  setMetric("m-mumu", s.mumu || "未知");
+  setMetric("m-adb", s.adb || "未知");
+  setMetric("m-maa", s.maa || "未运行");
+  $("m-task").textContent = s.task || "—";
+
+  ["btn-run","btn-emu","btn-maa"].forEach(id => $(id).disabled = !!s.running);
+  $("btn-abort").disabled = !s.running;
+
+  const cs = s.config_summary || {};
+  $("subline").textContent = "MuMu 模拟器 · 设备索引 " + cs.vm_index + " · " + cs.adb_address + " · " + (s.server || "");
+  $("nextsched").textContent = s.next_schedule ? ("定时：" + s.next_schedule) : "定时：未启用";
+}
+
+/* ---------- 配置面板 ---------- */
+/* 通知通道定义：key 与后端 notify.<key> 对应，fields=[字段名, 标签, 类型, 选项] */
+const CHANNELS = [
+  {key:"email", label:"邮件通知", tag:"", note:"QQ 邮箱：smtp.qq.com / 端口 465 / 密码填「授权码」（在 QQ 邮箱设置里生成）",
+   fields:[["smtp_host","SMTP 服务器","text"],["smtp_port","端口","number"],
+           ["username","发件账号","text"],["password","密码 / 授权码","password"],
+           ["to","收件邮箱（多个用逗号分隔）","text"]]},
+  {key:"serverchan", label:"Server酱（微信）", tag:"wx", note:"sct.ftqq.com 微信扫码登录，复制 SCT 开头的 SendKey（免费版每天 5 条）",
+   fields:[["sendkey","SendKey","password"]]},
+  {key:"pushplus", label:"PushPlus（微信）", tag:"wx", note:"pushplus.plus 微信登录获取 token；填群组编码则推送到群组",
+   fields:[["token","Token","password"],["topic","群组编码（可选）","text"]]},
+  {key:"wxpusher", label:"WxPusher（微信）", tag:"wx", note:"wxpusher.zjiecode.com 建应用拿 appToken，关注后填 UID_xxx（数字则当主题 ID）",
+   fields:[["app_token","appToken","password"],["uids","接收者 UID / 主题 ID","text"]]},
+  {key:"qmsg", label:"Qmsg酱（QQ）", tag:"qq", note:"qmsg.zendee.cn 用 QQ 登录，让机器人加你好友后复制 Key",
+   fields:[["key","Qmsg Key","password"],["qq","接收 QQ 号（可留空）","text"],
+           ["type","发送方式","select",[["send","私聊消息"],["group","QQ 群消息"]]]]},
+  {key:"webhook", label:"自定义 Webhook", tag:"", note:"可填企业微信 / 钉钉 / 飞书机器人地址，或任意接收 JSON 的接口",
+   fields:[["url","Webhook 地址","text"],
+           ["format","报文格式","select",[["通用 JSON","通用 JSON"],["企业微信机器人","企业微信机器人"],
+                                          ["钉钉机器人","钉钉机器人"],["飞书机器人","飞书机器人"]]]]},
+];
+
+function field(label, id, type, value, extra){
+  return '<div class="field"><label>' + label + '</label><input id="' + id + '" type="' + type +
+         '" value="' + esc(value == null ? "" : value) + '"' + (extra||"") + '></div>';
+}
+function selectField(label, id, value, options){
+  return '<div class="field"><label>' + label + '</label><select id="' + id + '">' +
+    options.map(o=>'<option value="' + esc(o[0]) + '"' + (o[0] === value ? " selected" : "") + '>' +
+      esc(o[1]) + '</option>').join("") + '</select></div>';
+}
+function chanField(ch, f, conf){
+  const [name, label, type, options] = f;
+  const id = "c-" + ch.key + "-" + name;
+  if(type === "select") return selectField(label, id, conf[name], options);
+  return field(label, id, type, conf[name]);
+}
+function timeRow(value){
+  const wrap = document.createElement("div");
+  wrap.className = "timerow";
+  wrap.innerHTML = '<input type="time" value="' + esc(value || "08:00") + '">' +
+                   '<button type="button" title="删除这个时间点">×</button>';
+  wrap.querySelector("button").onclick = ()=> wrap.remove();
+  return wrap;
+}
+function addTime(value){ $("times").appendChild(timeRow(value)); }
+
+function buildCfg(cs, schedule, notify){
+  const days = schedule.days || [];
+  const times = (schedule.times && schedule.times.length) ? schedule.times : ["08:00"];
+  let html = "";
+
+  html += '<div class="sect">模拟器与连接</div>' +
+    field("设备索引","c-vm","number",cs.vm_index) +
+    field("ADB 地址（留空自动推导）","c-adbaddr","text",cs.adb_address) +
+    field("就绪超时（秒）","c-timeout","number",cs.ready_timeout) +
+    '<div class="field"><label>跑完自动关模拟器</label><div class="row" style="padding:6px 0">' +
+      '<input type="checkbox" id="c-shutdown"' + (cs.shutdown_after_complete ? " checked" : "") +
+      '><span>任务完成后关闭模拟器</span></div></div>';
+
+  html += '<div class="sect">MAA</div>' +
+    field("MAA 主程序路径","c-maa","text",cs.maa_exe) +
+    field("挂机配置名","c-profile","text",cs.maa_profile);
+
+  html += '<div class="sect">定时挂机</div>' +
+    '<div class="field"><label>启用定时</label><div class="row" style="padding:6px 0">' +
+      '<input type="checkbox" id="c-sch-on"' + (schedule.enabled ? " checked" : "") +
+      '><span>到点自动执行一键挂机</span></div></div>' +
+    '<div class="field"><label>忙碌时</label><div class="row" style="padding:6px 0">' +
+      '<input type="checkbox" id="c-sch-idle"' + (schedule.only_if_idle ? " checked" : "") +
+      '><span>正在挂机则跳过本次</span></div></div>' +
+    '<div class="field" style="grid-column:1/-1"><label>触发时间点（可加多个，一天触发多次）</label>' +
+      '<div class="timelist" id="times"></div>' +
+      '<div class="row" style="margin-top:8px">' +
+        '<button type="button" class="ghost" id="btn-add-time" style="padding:3px 11px">＋ 添加时间点</button>' +
+        '<span style="color:var(--text3);font-size:12px">例如 08:00 和 20:00 各挂一次</span>' +
+      '</div></div>' +
+    '<div class="field" style="grid-column:1/-1"><label>生效日期</label><div class="days">' +
+      WEEK.map((w,i)=>'<label><input type="checkbox" class="c-day" value="' + i + '"' +
+        (days.includes(i) ? " checked" : "") + '>' + w + '</label>').join("") +
+    '</div></div>';
+
+  html += '<div class="sect">完成通知</div>' +
+    '<div class="field" style="grid-column:1/-1"><div class="row" style="padding:2px 0">' +
+      '<input type="checkbox" id="c-notify"' + (notify.desktop ? " checked" : "") +
+      '><span>桌面通知（托盘气泡）</span></div></div>';
+
+  for(const ch of CHANNELS){
+    const conf = notify[ch.key] || {};
+    html += '<div class="chan"><div class="chanhead">' +
+      '<label class="chk"><input type="checkbox" class="c-chon" data-ch="' + ch.key + '"' +
+        (conf.enabled ? " checked" : "") + '>' + ch.label + '</label>' +
+      (ch.tag ? '<span class="tag ' + ch.tag + '">' + (ch.tag === "wx" ? "微信" : "QQ") + '</span>' : "") +
+      '<span class="hint">' + ch.note + '</span>' +
+      '<button type="button" class="ghost tbtn" data-ch="' + ch.key + '" style="padding:3px 11px">发送测试</button>' +
+      '</div><div class="chanbody' + (conf.enabled ? "" : " off") + '" id="body-' + ch.key + '">' +
+      ch.fields.map(f=>chanField(ch, f, conf)).join("") +
+      '</div></div>';
+  }
+
+  $("cfg").innerHTML = html;
+  times.forEach(t=> addTime(t));
+  $("btn-add-time").onclick = ()=> addTime("");
+
+  document.querySelectorAll(".c-chon").forEach(cb=>{
+    cb.onchange = ()=> $("body-" + cb.dataset.ch).classList.toggle("off", !cb.checked);
+  });
+  document.querySelectorAll(".tbtn").forEach(btn=>{
+    btn.onclick = async ()=>{
+      btn.disabled = true;
+      const r = await post("/api/notify-test", {channel: btn.dataset.ch, config: collectCfg()});
+      btn.disabled = false;
+      if(!r) return;
+      toast(r.msg || "已测试");
+      (r.results || []).forEach(x=> addLog(x.ok ? "ok" : "warn",
+        "通知·" + x.label + "：" + x.detail));
+    };
+  });
+}
+
+function collectCfg(){
+  const days = Array.from(document.querySelectorAll(".c-day")).filter(x=>x.checked).map(x=>Number(x.value));
+  const times = Array.from(document.querySelectorAll("#times input[type=time]"))
+    .map(x=>x.value).filter(v=>/^\d{1,2}:\d{2}$/.test(v));
+
+  const notify = {desktop: $("c-notify").checked};
+  for(const ch of CHANNELS){
+    const box = document.querySelector('.c-chon[data-ch="' + ch.key + '"]');
+    const obj = {enabled: !!(box && box.checked)};
+    for(const f of ch.fields){
+      const el = $("c-" + ch.key + "-" + f[0]);
+      if(!el) continue;
+      obj[f[0]] = (f[2] === "number") ? Number(el.value || 0) : el.value.trim();
+    }
+    if(ch.key === "email") obj.use_ssl = true;
+    notify[ch.key] = obj;
+  }
+
+  return {
+    mumu:{
+      vm_index: Number($("c-vm").value || 0),
+      adb_address: $("c-adbaddr").value.trim(),
+      ready_timeout: Number($("c-timeout").value || 180),
+      shutdown_after_complete: $("c-shutdown").checked
+    },
+    maa:{ exe: $("c-maa").value.trim(), profile: $("c-profile").value.trim() },
+    schedule:{
+      enabled: $("c-sch-on").checked,
+      times: times,
+      time: times[0] || "",
+      days: days,
+      only_if_idle: $("c-sch-idle").checked
+    },
+    notify: notify
+  };
+}
+
+/* ---------- 动作 ---------- */
+async function post(path, body){
+  try{
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body || {})});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  }catch(e){
+    showOffline();
+    toast("无法连接本地服务，请先启动「MAA 一键挂机」");
+    return null;
+  }
+}
+async function act(path, body, okMsg){
+  const r = await post(path, body);
+  if(r) toast(r.msg || okMsg);
+}
+$("btn-run").onclick   = ()=> act("/api/start", {mode:"full"}, "已开始");
+$("btn-emu").onclick   = ()=> act("/api/start", {mode:"emu"},  "已开始");
+$("btn-maa").onclick   = ()=> act("/api/start", {mode:"maa"},  "已开始");
+$("btn-abort").onclick = ()=> act("/api/abort", {}, "已中止");
+$("btn-logs").onclick  = ()=> post("/api/open-logs");
+$("btn-export").onclick= ()=>{ location.href = "/api/logs/download"; };
+$("btn-quit").onclick  = async ()=>{
+  if(!confirm("确定退出 MAA 挂机助手？\n定时挂机与托盘都会一并停止。")) return;
+  await post("/api/quit");
+  try{ window.close(); }catch(e){}
+};
+$("btn-test").onclick  = async ()=>{
+  const r = await post("/api/notify-test", {config: collectCfg()});
+  if(!r) return;
+  toast(r.msg || "已发送");
+  (r.results || []).forEach(x=> addLog(x.ok ? "ok" : "warn", "通知·" + x.label + "：" + x.detail));
+};
+$("btn-save").onclick  = ()=> act("/api/config", {config: collectCfg()}, "已保存");
+$("btn-reload").onclick = ()=> loadState(true);
+
+/* ---------- SSE ---------- */
+let offline = false;
+function showOffline(){
+  if(offline) return;
+  offline = true;
+  $("conn").innerHTML = '<span class="dot d-bad"></span>服务未连接';
+  $("pill").className = "pill bad";
+  $("pill").innerHTML = '<span class="dot d-bad"></span>后端未启动';
+  $("subline").textContent = "本地服务没有响应。请双击桌面上的「MAA 一键挂机」启动后刷新本页。";
+  if(!$("cfg").children.length){
+    $("cfg").innerHTML = '<div class="field" style="grid-column:1/-1">' +
+      '<label>无法读取配置</label><div style="color:var(--text3)">' +
+      '请先启动本地服务（桌面快捷方式「MAA 一键挂机」），再刷新此页面。</div></div>';
+  }
+}
+function connect(){
+  const es = new EventSource("/api/events");
+  es.onopen = ()=>{ offline = false; $("conn").innerHTML = '<span class="dot d-ok"></span>已连接'; };
+  es.onerror = ()=>{
+    $("conn").innerHTML = '<span class="dot d-warn"></span>重连中…';
+    setTimeout(showOffline, 4000);
+  };
+  es.onmessage = ev=>{
+    let d; try{ d = JSON.parse(ev.data); }catch(e){ return; }
+    if(d.type === "log") addLog(d.level, d.msg, d.time);
+    else if(d.type === "state") renderState(d.state);
+  };
+}
+
+async function loadState(full){
+  let s;
+  try{
+    const r = await fetch("/api/state", {cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    s = await r.json();
+  }catch(e){
+    showOffline();
+    return;
+  }
+  offline = false;
+  renderState(s);
+  if(full || !$("cfg").children.length){
+    const cs = s.config_summary || {};
+    buildCfg(cs, cs.schedule || {}, cs.notify || {desktop: cs.notify_desktop !== false});
+  }
+}
+
+loadState(true);
+connect();
+</script>
+</body>
+</html>
