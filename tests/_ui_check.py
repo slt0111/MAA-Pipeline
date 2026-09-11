@@ -1,10 +1,10 @@
-
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 """检查 ui.html 里前端脚本的语法与元素引用一致性。"""
 import os
 import re
 import subprocess
 import tempfile
+
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BASE = APP_DIR
 html = open(os.path.join(BASE, "ui.html"), encoding="utf-8").read()
@@ -20,7 +20,7 @@ if res.returncode:
 ids = set(re.findall(r'id="([^"]+)"', html))
 refs = set(re.findall(r'\$\("([^"]+)"\)', js))
 # 动态生成的 id：- 前缀为通道/时间等运行时元素
-dynamic_prefixes = ("bar-", "lb-", "body-", "c-", "times", "btn-add-time")
+dynamic_prefixes = ("bar-", "lb-", "body-", "c-", "times", "btn-add-time", "accounts", "btn-add-acc")
 missing = sorted(r for r in refs if r not in ids and not r.startswith(dynamic_prefixes))
 print("静态 id 数:", len(ids), "| $(...) 引用数:", len(refs))
 print("未匹配引用:", missing or "无")

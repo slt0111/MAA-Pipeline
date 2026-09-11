@@ -102,6 +102,8 @@ DEFAULT_CONFIG = {
         "mirror_logs": True,
         "close_after_complete": True,
         "close_delay": 10,
+        # 同一模拟器顺序切号：空列表 = 单账号（与历史行为一致）
+        "accounts": [],
     },
     "server": {"port": 17800, "open_browser": True, "window_mode": "auto"},
     # times 为空时回退到老的单个 time 字段，保证老配置不丢设置
@@ -272,6 +274,47 @@ class Config:
     @property
     def maa_dir(self) -> str:
         return os.path.dirname(self.maa_exe)
+
+
+def normalized_accounts(data) -> list:
+    """规范化账号列表。缺字段、空列表、老配置都当成「未配置多账号」。"""
+    raw = data
+    if isinstance(data, Config):
+        raw = data.get("maa", "accounts", default=[])
+    elif isinstance(data, dict) and "accounts" in data and not isinstance(data.get("maa"), dict):
+        raw = data.get("accounts")
+    elif isinstance(data, dict):
+        raw = (data.get("maa") or {}).get("accounts", data.get("accounts"))
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        account_name = str(item.get("account_name") or item.get("account") or "").strip()
+        if not name and not account_name:
+            continue
+        out.append({
+            "name": name or account_name,
+            "account_name": account_name,
+            "enabled": bool(item.get("enabled", True)),
+        })
+    return out
+
+
+def enabled_accounts(data) -> list:
+    """按界面顺序取出启用中的账号。"""
+    return [item for item in normalized_accounts(data) if item.get("enabled")]
+
+
+def account_label(acc: dict | None, index: int = 1, total: int = 1) -> str:
+    if not acc:
+        return "当前登录"
+    name = (acc.get("name") or acc.get("account_name") or "未命名").strip()
+    if total > 1:
+        return "%d/%d %s" % (index, total, name)
+    return name
 
 
 # ============================================================ 路径自动探测
@@ -497,10 +540,56 @@ def post_close_to_pid(pid: int) -> int:
 # ============================================================ MAA 控制
 
 
-def inject_maa_profile(cfg: Config, log):
+def _is_startup_task(item: dict) -> bool:
+    """识别 MAA 任务队列里的「开始唤醒」项（兼容新旧 gui.new.json 字段）。"""
+    if not isinstance(item, dict):
+        return False
+    type_hint = str(item.get("$type") or item.get("type") or "")
+    if "startup" in type_hint.lower():
+        return True
+    task_type = item.get("TaskType")
+    if task_type in (None, ""):
+        return False
+    if task_type in (1, "1", "StartUp", "StartUpTask"):
+        return True
+    return "startup" in str(task_type).lower()
+
+
+def apply_account_name(profile: dict, account_name: str) -> int:
+    """把切号片段写入流水线配置。返回命中的开始唤醒任务数。
+
+    MAA 只在 StartUp /「开始唤醒」任务执行时切号，且只切到客户端里已经登录过的账号。
+    新版把 AccountName 放在 TaskQueue 的 StartUpTask 上；部分版本还要求
+    AccountSwitchEnabled。老字段 Start.AccountName / StartUpSettings.AccountName
+    一并写入，避免不同 MAA 版本读不到。
+    """
+    account_name = (account_name or "").strip()
+    hits = 0
+
+    gui = profile.setdefault("Gui", {})
+    startup = gui.setdefault("StartUpSettings", {})
+    startup["AccountName"] = account_name
+
+    start = profile.setdefault("Start", {})
+    if isinstance(start, dict):
+        start["AccountName"] = account_name
+
+    queue = profile.get("TaskQueue")
+    if isinstance(queue, list):
+        for item in queue:
+            if not _is_startup_task(item):
+                continue
+            item["AccountName"] = account_name
+            item["AccountSwitchEnabled"] = bool(account_name)
+            hits += 1
+    return hits
+
+
+def inject_maa_profile(cfg: Config, log, account_name=""):
     """把「挂机流水线」配置写入 MAA 的 gui.new.json，并返回原来的 Current 值。
 
     MAA 退出时会回写配置文件，所以要恢复到注入前的状态。
+    account_name 非空时写入开始唤醒的切号字段（MAA 官方 account_name 片段匹配）。
     """
     maa_dir = cfg.maa_dir
     maa_exe = cfg.maa_exe
@@ -540,13 +629,27 @@ def inject_maa_profile(cfg: Config, log):
     connect["Address"] = cfg.adb_address
     connect["AutoDetect"] = False
 
+    account_name = (account_name or "").strip()
+    if account_name:
+        hits = apply_account_name(profile, account_name)
+        if hits:
+            log("info", "已写入开始唤醒切号「%s」（命中 %d 个任务）" % (account_name, hits))
+        else:
+            log(
+                "warn",
+                "已写入切号「%s」，但配置里没找到「开始唤醒」任务。"
+                "请确认 MAA 任务队列包含开始唤醒，且目标账号已在客户端登录"
+                % account_name,
+            )
+
     confs[profile_name] = profile
     data["Current"] = profile_name
 
     with open(cfg_path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=4)
 
-    log("info", "已注入 MAA 配置「%s」（RunDirectly = 启动即挂机）" % profile_name)
+    extra = "，切号「%s」" % account_name if account_name else ""
+    log("info", "已注入 MAA 配置「%s」（RunDirectly = 启动即挂机%s）" % (profile_name, extra))
     return prev_current
 
 
@@ -585,6 +688,7 @@ class Engine:
         self._maasession_pos = 0
         self._maa_pending = ""        # 未读完的日志残行
         self._maa_recent = {}         # 去重：消息 -> 上次播报时间
+        self._account_results = []    # 多账号本轮结果：{name, account_name, ok, error}
         self.state = {
             "running": False,
             "mode": None,
@@ -594,6 +698,7 @@ class Engine:
             "adb": "未知",
             "maa": "未运行",
             "task": "—",
+            "account": "",
             "last_error": "",
             "last_run": "",
             "last_result": "",
@@ -630,6 +735,8 @@ class Engine:
             "maa_profile": self.cfg.get("maa", "profile", default=""),
             "maa_close_after_complete": self.cfg.get("maa", "close_after_complete", default=True),
             "maa_close_delay": self.cfg.get("maa", "close_delay", default=10),
+            "accounts": normalized_accounts(self.cfg),
+            "account_results": list(self._account_results),
             "schedule": normalized_schedule(self.cfg),
             "notify": normalized_notify(self.cfg),
             "notify_desktop": self.cfg.get("notify", "desktop", default=True),
@@ -683,6 +790,7 @@ class Engine:
         self._connect_failed = False
         self._maa_pending = ""
         self._maa_recent = {}
+        self._account_results = []
         self._reset_phases(mode)
         self._set(
             running=True,
@@ -690,6 +798,7 @@ class Engine:
             elapsed=0,
             last_error="",
             task="—",
+            account="",
             mumu="检查中",
             adb="未知",
             maa="未运行",
@@ -710,6 +819,12 @@ class Engine:
             if mode in ("full", "maa"):
                 self._phase_maa()
                 self._phase_wrap()
+                # 多账号有失败时不把整轮标成成功（单账号仍保持原来的「没跑完也不算失败」）
+                summary_err = self._account_failure_message()
+                if summary_err:
+                    ok = False
+                    err = summary_err
+                    self.log("error", err)
             else:
                 self.log("ok", "模拟器已就绪，可以开始挂机了")
         except PipelineError as exc:
@@ -723,6 +838,9 @@ class Engine:
             _append_file_log("error", traceback.format_exc())
         finally:
             self.stop_evt.set()
+            if self.maa_proc is not None and self.maa_proc.poll() is None:
+                self._close_maa("流水线结束")
+            restore_maa_current(self.cfg, self._prev_current, self.log)
             elapsed = int(time.time() - started)
             with self.lock:
                 self.state["running"] = False
@@ -730,7 +848,7 @@ class Engine:
                 self.state["last_error"] = err
                 self.state["last_run"] = dt.datetime.now().strftime("%m-%d %H:%M")
                 self.state["runs"] += 1
-                self.state["last_result"] = "成功" if ok else "失败"
+                self.state["last_result"] = self._result_label(ok)
                 for key, status in self.state["phases"].items():
                     if status == "active":
                         self.state["phases"][key] = "done" if ok else "failed"
@@ -740,12 +858,51 @@ class Engine:
                 "══ 流水线结束，用时 %s ══" % _fmt_duration(elapsed),
             )
             if self.cfg.get("notify", "desktop", default=True):
-                title = "MAA 挂机完成" if ok else "MAA 挂机异常"
-                body = "用时 %s" % _fmt_duration(elapsed) if ok else err[:120]
+                title, body = self._notify_copy(ok, elapsed, err)
                 notify(title, body, self.cfg)
 
     def _mode_name(self, mode):
         return {"full": "一键挂机", "emu": "仅启动模拟器", "maa": "仅启动 MAA"}.get(mode, mode)
+
+    def _result_label(self, ok: bool) -> str:
+        if ok:
+            return "成功"
+        results = self._account_results or []
+        if len(results) > 1 and any(item.get("ok") for item in results) and any(not item.get("ok") for item in results):
+            return "部分失败"
+        return "失败"
+
+    def _format_account_summary(self) -> str:
+        results = self._account_results or []
+        if not results:
+            return ""
+        ok_n = sum(1 for item in results if item.get("ok"))
+        failed = [item.get("name") or item.get("account_name") or "未命名" for item in results if not item.get("ok")]
+        if not failed:
+            return "完成 %d 个账号" % ok_n
+        return "完成 %d/%d 个账号，失败：%s" % (ok_n, len(results), "、".join(failed))
+
+    def _account_failure_message(self) -> str:
+        """多账号有失败时返回摘要；空列表 / 单账号返回空，保持历史「没跑完也不算整轮失败」。"""
+        results = self._account_results or []
+        if len(results) <= 1:
+            return ""
+        if any(not item.get("ok") for item in results):
+            return self._format_account_summary()
+        return ""
+
+    def _notify_copy(self, ok: bool, elapsed: int, err: str) -> tuple:
+        dur = _fmt_duration(elapsed)
+        if ok:
+            accs = enabled_accounts(self.cfg)
+            if len(accs) > 1:
+                return "MAA 挂机完成", "用时 %s，完成 %d 个账号" % (dur, len(accs))
+            return "MAA 挂机完成", "用时 %s" % dur
+        results = self._account_results or []
+        some_ok = len(results) > 1 and any(item.get("ok") for item in results)
+        title = "MAA 挂机部分失败" if some_ok else "MAA 挂机异常"
+        body = (err or self._format_account_summary() or "挂机异常")[:160]
+        return title, body
 
     def _elapsed_ticker(self, started):
         while not self.stop_evt.is_set():
@@ -766,6 +923,12 @@ class Engine:
         self.log("ok", "环境自检通过")
         self.log("info", "模拟器 CLI %s" % cli)
         self.log("info", "MAA 主程序 %s" % maa)
+        accs = enabled_accounts(self.cfg)
+        if accs:
+            names = "、".join(item["name"] for item in accs)
+            self.log("info", "将在同一模拟器上顺序挂机 %d 个账号：%s" % (len(accs), names))
+        else:
+            self.log("info", "未配置多账号，按当前客户端登录号跑一轮")
 
         info = mumu_info(self.cfg)
         started = bool(info.get("is_android_started"))
@@ -860,15 +1023,115 @@ class Engine:
         except PipelineError:
             pass
 
-        self._prev_current = inject_maa_profile(self.cfg, self.log)
+        accounts = enabled_accounts(self.cfg)
+        queue = accounts or [None]
+        multi = len(accounts) > 1
+        self._account_results = []
+        for idx, acc in enumerate(queue, 1):
+            if self.stop_evt.is_set():
+                raise PipelineError("已被手动中止")
+            if idx > 1:
+                self._ensure_maa_stopped()
+
+            account_name = (acc or {}).get("account_name", "") if acc else ""
+            display = ((acc or {}).get("name") or account_name or "当前登录") if acc else "当前登录"
+            label = account_label(acc, idx, len(queue))
+            self._set(account=label, task="—")
+            if acc is not None:
+                extra = "，匹配「%s」" % account_name if account_name else "（不切号，沿用当前登录）"
+                self.log("phase", "══ 账号 %s%s ══" % (label, extra))
+
+            more_after = idx < len(queue)
+            reason = ""
+            try:
+                self._launch_and_monitor_maa(account_name, force_close=more_after)
+            except PipelineError as exc:
+                if self.stop_evt.is_set():
+                    raise PipelineError("已被手动中止")
+                if not multi:
+                    raise
+                reason = str(exc)
+                self._close_maa_if_running("账号失败，关闭后继续下一号")
+
+            if self.stop_evt.is_set():
+                raise PipelineError("已被手动中止")
+
+            if self._completed:
+                self._account_results.append({
+                    "name": display, "account_name": account_name, "ok": True, "error": "",
+                })
+                if more_after:
+                    self.log("ok", "账号「%s」已完成，准备切换下一账号" % label)
+                continue
+
+            reason = reason or "未检测到「任务已全部完成」"
+            self._account_results.append({
+                "name": display, "account_name": account_name, "ok": False, "error": reason,
+            })
+            if not multi:
+                break
+            self.log("error", "账号「%s」未完成：%s，跳过并继续下一账号" % (label, reason))
+            self._close_maa_if_running("账号未完成，关闭后继续下一号")
+
+        if multi:
+            failed = [item for item in self._account_results if not item.get("ok")]
+            self._completed = not failed and bool(self._account_results)
+            if failed:
+                self.log("warn", self._format_account_summary())
+        self._end_phase("maa", ok=not (multi and any(not item.get("ok") for item in self._account_results)))
+
+    def _close_maa_if_running(self, reason: str):
+        if self.maa_proc is not None and self.maa_proc.poll() is None:
+            self._close_maa(reason)
+
+    def _ensure_maa_stopped(self, timeout=None, interval=None):
+        """切下一号前确认 MAA 已退出。先按现有流程关本进程，再短轮询；仍在则整轮失败。"""
+        if timeout is None:
+            timeout = getattr(self, "_maa_stop_timeout", 12)
+        if interval is None:
+            interval = getattr(self, "_maa_stop_interval", 1.5)
+        self._close_maa_if_running("准备切换下一账号")
+        deadline = time.time() + max(0.0, float(timeout))
+        step = max(0.05, float(interval))
+        while True:
+            if not process_running("MAA.exe"):
+                return
+            if time.time() >= deadline:
+                break
+            time.sleep(min(step, max(0.0, deadline - time.time())))
+        raise PipelineError("上一账号的 MAA 仍在运行，无法切换到下一账号")
+
+    def _wait_tail_thread(self, timeout=4):
+        th = self._tail_thread
+        if th is not None and th.is_alive():
+            th.join(timeout=timeout)
+        self._tail_thread = None
+
+    def _reset_maa_session(self):
+        """每个账号开跑前清掉上一轮的监控状态，避免「任务已全部完成」串号。"""
+        self._wait_tail_thread()
+        self._completed = False
+        self._started_evidence = False
+        self._connect_failed = False
+        self._maa_pending = ""
+        self._maa_recent = {}
+        self.maa_proc = None
+
+    def _launch_and_monitor_maa(self, account_name="", force_close=False):
+        """注入配置、拉起一次 MAA 并监控到结束。force_close 用于还要切下一号时必须关掉窗口。"""
+        self._reset_maa_session()
+        prev = inject_maa_profile(self.cfg, self.log, account_name=account_name)
+        if self._prev_current is None:
+            self._prev_current = prev
 
         log_path = os.path.join(self.cfg.maa_dir, "debug", "gui.log")
         self._maasession_pos = os.path.getsize(log_path) if os.path.exists(log_path) else 0
 
-        self.log("info", "拉起 MAA：--config %s" % self.cfg.get("maa", "profile", default=""))
+        profile_name = self.cfg.get("maa", "profile", default="")
+        self.log("info", "拉起 MAA：--config %s" % profile_name)
         try:
             self.maa_proc = subprocess.Popen(
-                [self.cfg.maa_exe, "--config", self.cfg.get("maa", "profile", default="")],
+                [self.cfg.maa_exe, "--config", profile_name],
                 cwd=self.cfg.maa_dir,
             )
         except Exception as exc:  # noqa: BLE001
@@ -910,11 +1173,46 @@ class Engine:
                 "warn",
                 "MAA 已拉起，但 %d 秒内没有检测到任务开始。"
                 "若界面停在待机状态，请检查「%s」配置是否可用"
-                % (start_timeout, self.cfg.get("maa", "profile", default="")),
+                % (start_timeout, profile_name),
             )
         self._set(maa="运行中")
-        self._end_phase("maa")
-        self._monitor_maa()
+        self._monitor_maa(force_close=force_close)
+        self._wait_tail_thread()
+
+    def _monitor_maa(self, force_close=False):
+        self.log("info", "进入挂机监控，可随时点「中止」停止")
+        auto_close = bool(self.cfg.get("maa", "close_after_complete", default=True))
+        if force_close and not auto_close:
+            self.log("info", "还要切换下一账号，本轮结束后仍会关闭 MAA")
+            auto_close = True
+        try:
+            delay = max(0, int(self.cfg.get("maa", "close_delay", default=10) or 0))
+        except Exception:
+            delay = 10
+
+        done_at = None
+        while not self.stop_evt.is_set():
+            if self.maa_proc is None or self.maa_proc.poll() is not None:
+                break
+            # 关键：MAA 报「任务已全部完成」后 GUI 进程并不会自己退出。
+            # 必须在这里主动收尾，否则会一直空转等进程退出（旧版本即如此，
+            # 表现为任务跑完但迟迟不关 MAA / 模拟器，只能手动点「中止」）。
+            if self._completed:
+                if done_at is None:
+                    done_at = time.time()
+                    if auto_close:
+                        self.log("ok", "任务已全部完成，%d 秒后自动关闭 MAA 并收尾" % delay)
+                    else:
+                        self.log("info", "任务已全部完成（按配置保留 MAA 运行）")
+                elif auto_close and time.time() - done_at >= delay:
+                    self._close_maa("任务已全部完成")
+                    break
+            time.sleep(0.5)
+
+        if self.stop_evt.is_set() and self.maa_proc and self.maa_proc.poll() is None:
+            self._close_maa("收到中止请求")
+        time.sleep(1.5)  # 给日志线程一点时间收尾
+        self._set(maa="已退出")
 
     def _close_maa(self, reason: str):
         """关闭 MAA：先请窗口自己退出，超时再终止，最后强杀。"""
@@ -945,38 +1243,6 @@ class Engine:
         except Exception:
             pass
 
-    def _monitor_maa(self):
-        self.log("info", "进入挂机监控，可随时点「中止」停止")
-        auto_close = bool(self.cfg.get("maa", "close_after_complete", default=True))
-        try:
-            delay = max(0, int(self.cfg.get("maa", "close_delay", default=10) or 0))
-        except Exception:
-            delay = 10
-
-        done_at = None
-        while not self.stop_evt.is_set():
-            if self.maa_proc is None or self.maa_proc.poll() is not None:
-                break
-            # 关键：MAA 报「任务已全部完成」后 GUI 进程并不会自己退出。
-            # 必须在这里主动收尾，否则会一直空转等进程退出（旧版本即如此，
-            # 表现为任务跑完但迟迟不关 MAA / 模拟器，只能手动点「中止」）。
-            if self._completed:
-                if done_at is None:
-                    done_at = time.time()
-                    if auto_close:
-                        self.log("ok", "任务已全部完成，%d 秒后自动关闭 MAA 并收尾" % delay)
-                    else:
-                        self.log("info", "任务已全部完成（按配置保留 MAA 运行）")
-                elif auto_close and time.time() - done_at >= delay:
-                    self._close_maa("任务已全部完成")
-                    break
-            time.sleep(0.5)
-
-        if self.stop_evt.is_set() and self.maa_proc and self.maa_proc.poll() is None:
-            self._close_maa("收到中止请求")
-        time.sleep(1.5)  # 给日志线程一点时间收尾
-        self._set(maa="已退出")
-
     def _phase_wrap(self):
         self._begin_phase("wrap")
         max_wait = 10
@@ -987,7 +1253,11 @@ class Engine:
         restore_maa_current(self.cfg, self._prev_current, self.log)
 
         if self._completed:
-            self.log("ok", "已确认 MAA 报告「任务已全部完成」")
+            accs = enabled_accounts(self.cfg)
+            if len(accs) > 1:
+                self.log("ok", "已确认全部 %d 个账号都报告「任务已全部完成」" % len(accs))
+            else:
+                self.log("ok", "已确认 MAA 报告「任务已全部完成」")
             if self.cfg.get("mumu", "shutdown_after_complete", default=True):
                 self.log("info", "正在关闭模拟器…")
                 rc, out = mumu_control(self.cfg, "shutdown")
@@ -1009,7 +1279,11 @@ class Engine:
             else:
                 self.log("info", "按配置保留模拟器运行")
         else:
-            self.log("warn", "未检测到「任务已全部完成」，保留模拟器运行以避免误关")
+            summary = self._format_account_summary()
+            if summary and len(self._account_results) > 1:
+                self.log("warn", summary + "。未全部完成，保留模拟器运行以避免误关")
+            else:
+                self.log("warn", "未检测到「任务已全部完成」，保留模拟器运行以避免误关")
         self._end_phase("wrap")
 
     def _wait_mumu_stopped(self, timeout=25):
@@ -1091,6 +1365,10 @@ class Engine:
             self._completed = True
             self._log_maa("ok", "MAA：任务已全部完成")
             self._set(task="全部完成")
+            return
+        if "AccountSwitch" in body or "切换账号" in body:
+            self._started_evidence = True
+            self._log_maa("ok", "MAA：%s" % body[:200], window=8.0)
             return
         if self.RE_CONNECT_FAIL.search(body):
             self._connect_failed = True
@@ -1629,7 +1907,10 @@ MF_STRING = 0x0000
 TPM_RETURNCMD, TPM_LEFTALIGN, TPM_BOTTOMALIGN = 0x0100, 0x0000, 0x0020
 
 LRESULT = ctypes.c_ssize_t
-WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+try:
+    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+except AttributeError:  # 非 Windows 上没有 WINFUNCTYPE，方便单测 import
+    WNDPROC = ctypes.CFUNCTYPE(LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
 
 
 class GUID(ctypes.Structure):
@@ -2102,6 +2383,8 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(incoming.get("schedule"), dict):
                 times = schedule_times(cfg.data.get("schedule") or {})
                 cfg.data.setdefault("schedule", {})["time"] = times[0] if times else ""
+            if isinstance(cfg.data.get("maa"), dict):
+                cfg.data["maa"]["accounts"] = normalized_accounts(cfg)
             cfg.save()
             bus.log("info", "配置已保存")
             engine._publish()  # noqa: SLF001
@@ -2228,6 +2511,13 @@ def selftest() -> int:
     check("MAA 主程序", cfg.maa_exe)
     print("  [i] MAA 目录 %s" % cfg.maa_dir)
     print("  [i] ADB 地址 %s" % cfg.adb_address)
+    accs = enabled_accounts(cfg)
+    if accs:
+        print("  [i] 多账号顺序挂机：%s" % "、".join(
+            "%s（%s）" % (a["name"], a["account_name"] or "不切号") for a in accs
+        ))
+    else:
+        print("  [i] 未配置多账号（按当前登录号跑一轮）")
 
     print("\n[2] MAA 配置文件")
     cfg_path = os.path.join(cfg.maa_dir, "config", "gui.new.json")
