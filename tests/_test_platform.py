@@ -108,10 +108,13 @@ ok(win.maa_argv(r"D:\MAA\MAA.exe", "挂机流水线") ==
 ok(mac.maa_argv("/opt/homebrew/bin/maa", "挂机流水线") ==
    ["/opt/homebrew/bin/maa", "-p", "挂机流水线", "run"], "maa-cli 用 -p / run")
 ok(mac.is_maa_cli("/usr/local/bin/maa") is True, "识别 maa-cli")
+ok(mac.is_maa_cli("/opt/homebrew/bin/maa-cli") is True, "识别 maa-cli 全名")
 ok(mac.is_maa_cli("/Applications/MAA.app") is False, ".app 不是 cli")
+ok(mac.is_maa_cli("/Applications/MAA.app/Contents/MacOS/MAA") is False,
+   "MAA.app 内二进制不是 cli")
 ok(mac.uses_gui_inject("/Applications/MAA.app") is True, "MAA.app 走 gui.new.json 注入")
 ok(mac.uses_gui_inject("maa") is False, "maa-cli 不走 GUI 注入")
-ok(win.resolve_maa_dir(r"D:\MAA\MAA.exe") == r"D:\MAA", "Windows maa_dir = dirname")
+ok(win.resolve_maa_dir("/opt/MAA/MAA.exe") == "/opt/MAA", "Windows maa_dir = dirname")
 ok(mac.resolve_maa_binary("/Applications/MAA.app").endswith(".app") or
    "MacOS" in mac.resolve_maa_binary("/Applications/MAA.app") or
    mac.resolve_maa_binary("/Applications/MAA.app") == "/Applications/MAA.app",
@@ -135,7 +138,7 @@ try:
        "Mac 默认 MAA 指向 .app")
 
     with tempfile.TemporaryDirectory() as tmp:
-        exe = os.path.join(tmp, "MAA")
+        exe = os.path.join(tmp, "MAA.exe")
         open(exe, "w").close()
         os.makedirs(os.path.join(tmp, "config"))
         gui_path = os.path.join(tmp, "config", "gui.new.json")

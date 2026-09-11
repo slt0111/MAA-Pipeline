@@ -214,8 +214,17 @@ class Platform:
     # ---------- MAA ----------
 
     def is_maa_cli(self, exe: str) -> bool:
-        base = os.path.basename((exe or "").rstrip("/")).lower()
-        return base in ("maa", "maa-cli")
+        """maa-cli 一般是 Homebrew 的 ``maa`` / ``maa-cli``，不是 MAA.app 里的同名二进制。"""
+        raw = (exe or "").rstrip("/")
+        base = os.path.basename(raw).lower()
+        if base == "maa-cli":
+            return True
+        if base != "maa":
+            return False
+        norm = raw.replace("\\", "/").lower()
+        if ".app/contents/macos" in norm:
+            return False
+        return True
 
     def resolve_maa_binary(self, exe: str) -> str:
         return exe or ""
