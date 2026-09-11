@@ -1,0 +1,5 @@
+# macOS 源码运行 / 打 dmg 的额外依赖（Windows 不需要）
+pywebview>=4.0
+pyobjc-framework-Cocoa>=10.0
+# 打 .app + .dmg 时再装：
+#   python3 -m pip install pyinstaller

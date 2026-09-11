@@ -51,6 +51,14 @@ def main():
         "--collect-all", "webview",
         "--collect-all", "clr_loader",
         "--collect-all", "pythonnet",
+        "--hidden-import", "plat",
+        "--hidden-import", "plat.windows",
+        "--hidden-import", "plat.macos",
+        "--hidden-import", "plat.linux",
+        "--hidden-import", "plat.base",
+        "--hidden-import", "plat.util",
+        "--hidden-import", "plat.maa_cli",
+        "--hidden-import", "plat.tray_macos",
         os.path.join(APP_DIR, "pipeline.py"),
     ]
     rc = run(args, cwd=APP_DIR)

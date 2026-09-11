@@ -6,6 +6,7 @@ MAA 一键挂机流水线
           → 拉起 MAA 自动开始挂机 → 收尾归档（按需关闭模拟器）
 
 界面默认走原生窗口（装了 pywebview 时），也兼容浏览器模式，带实时运行记录。
+Windows 与 macOS 共用同一套流水线；平台差异在 plat/ 适配层。
 
 命令行：
     python pipeline.py             正常启动（原生窗口 + 托盘）
@@ -37,6 +38,8 @@ from email.header import Header
 from email.mime.text import MIMEText
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import plat as platmod
+
 def _base_dir():
     """数据根目录：打包成 exe 后是 exe 所在目录，源码运行时是脚本目录。
     配置、日志、MAA 都以此为基准，保证 exe 放在哪都能自洽。"""
@@ -67,6 +70,16 @@ def _ui_path():
 UI_PATH = _ui_path()
 
 CREATE_NO_WINDOW = 0x08000000
+
+
+def host():
+    """当前操作系统适配器（Windows / macOS / Linux）。测试可 plat.set_current(...) 覆盖。"""
+    return platmod.current()
+
+
+def set_platform(name):
+    """测试用：切换平台适配器。"""
+    return platmod.set_current(name)
 
 PHASES = [
     ("env", "环境自检"),
@@ -104,6 +117,8 @@ DEFAULT_CONFIG = {
         "close_delay": 10,
         # 同一模拟器顺序切号：空列表 = 单账号（与历史行为一致）
         "accounts": [],
+        # maa-cli 专用配置目录；留空则自动探测（MAA_CONFIG_DIR / maa dir config）
+        "cli_config_dir": "",
     },
     "server": {"port": 17800, "open_browser": True, "window_mode": "auto"},
     # times 为空时回退到老的单个 time 字段，保证老配置不丢设置
@@ -130,6 +145,15 @@ DEFAULT_CONFIG = {
 }
 
 WEEK_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _seed_config() -> dict:
+    """默认配置：Windows 字段布局不变；非 Windows 只覆盖路径占位，不改 schema。"""
+    data = json.loads(json.dumps(DEFAULT_CONFIG))
+    overlay = host().default_config_overlay(APP_DIR)
+    if overlay:
+        data = deep_merge(data, overlay)
+    return data
 
 
 # ============================================================ 基础工具
@@ -163,8 +187,7 @@ def run_cmd(args, timeout=30, cwd=None):
 
 
 def process_running(image_name: str) -> bool:
-    rc, out, _ = run_cmd(["tasklist", "/FI", "IMAGENAME eq %s" % image_name, "/NH"], timeout=15)
-    return rc == 0 and image_name.lower() in out.lower()
+    return host().process_running(image_name)
 
 
 def brief_output(text: str, limit: int = 160) -> str:
@@ -210,14 +233,14 @@ class PipelineError(Exception):
 class Config:
     def __init__(self, path=CFG_PATH):
         self.path = path
-        self.data = dict(DEFAULT_CONFIG)
+        self.data = _seed_config()
         self.load()
 
     def load(self):
         if os.path.exists(self.path):
             try:
                 with open(self.path, "r", encoding="utf-8") as fh:
-                    self.data = deep_merge(DEFAULT_CONFIG, json.load(fh))
+                    self.data = deep_merge(_seed_config(), json.load(fh))
             except Exception:
                 pass
         else:
@@ -228,7 +251,7 @@ class Config:
         """用一份内存里的配置构造实例（供"测试但不保存"的场景使用）。"""
         obj = cls.__new__(cls)
         obj.path = path or CFG_PATH
-        obj.data = deep_merge(DEFAULT_CONFIG, data or {})
+        obj.data = deep_merge(_seed_config(), data or {})
         return obj
 
     def save(self):
@@ -265,7 +288,7 @@ class Config:
         addr = (self.get("mumu", "adb_address", default="") or "").strip()
         if addr:
             return addr
-        return "127.0.0.1:%d" % (16384 + 32 * self.vm_index)
+        return host().default_adb_address(self.vm_index)
 
     @property
     def maa_exe(self) -> str:
@@ -273,7 +296,8 @@ class Config:
 
     @property
     def maa_dir(self) -> str:
-        return os.path.dirname(self.maa_exe)
+        override = (self.get("maa", "config_dir", default="") or "").strip()
+        return host().resolve_maa_dir(self.maa_exe, override)
 
 
 def normalized_accounts(data) -> list:
@@ -323,89 +347,58 @@ def account_label(acc: dict | None, index: int = 1, total: int = 1) -> str:
 # 配置里存的是"上一次找到的位置"，一旦失效就按常见安装位置重新找一遍，
 # 找到后自动回填并保存——拷过去基本做到开箱即用，不用手填路径。
 
-_MUMU_REL_TARGETS = [r"nx_main\mumu-cli.exe", r"shell\mumu-cli.exe"]
-_MUMU_SEARCH_ROOTS = [
-    r"Program Files\Netease",
-    r"Program Files (x86)\Netease",
-    r"Netease",
-    r"Games\Netease",
-    r"MuMu",
-    r"Program Files",
-]
-
-
-def _drive_letters():
-    out = []
-    for letter in "CDEFGH":
-        if os.path.isdir("%s:\\" % letter):
-            out.append(letter)
-    return out
+def _path_ready(path: str) -> bool:
+    """可执行文件或 .app 目录都算就位。"""
+    if not path:
+        return False
+    if os.path.isfile(path):
+        return True
+    if os.path.isdir(path) and path.rstrip("/").endswith(".app"):
+        return True
+    return False
 
 
 def _find_mumu_cli():
-    drives = _drive_letters()
-    for drive in drives:
-        for root_rel in _MUMU_SEARCH_ROOTS:
-            root = r"%s:\%s" % (drive, root_rel)
-            if not os.path.isdir(root):
-                continue
-            # 直接命中
-            for rel in _MUMU_REL_TARGETS:
-                cand = os.path.join(root, rel)
-                if os.path.isfile(cand):
-                    return cand
-            # Netease 下可能叫 MuMu / MuMuPlayer-12.0 / MuMuPlayerGlobal-12.0 …
-            try:
-                names = os.listdir(root)
-            except OSError:
-                continue
-            for name in names:
-                if "mumu" not in name.lower():
-                    continue
-                for rel in _MUMU_REL_TARGETS:
-                    cand = os.path.join(root, name, rel)
-                    if os.path.isfile(cand):
-                        return cand
-    return None
+    return host().find_mumu_cli()
 
 
 def _find_maa_exe():
-    cands = [
-        os.path.join(APP_DIR, "MAA", "MAA.exe"),
-        os.path.join(os.path.dirname(APP_DIR), "MAA", "MAA.exe"),
-    ]
-    for drive in _drive_letters():
-        cands += [
-            r"%s:\MAA\MAA.exe" % drive,
-            r"%s:\Program Files\MAA\MAA.exe" % drive,
-            r"%s:\Games\MAA\MAA.exe" % drive,
-        ]
-    return next((c for c in cands if os.path.isfile(c)), None)
+    return host().find_maa_exe(APP_DIR)
 
 
 def autodetect_paths(cfg: Config, log=None):
     """配置里的路径失效时，按常见安装位置重新探测，找到就回填保存。"""
     changed = []
     missing = []
+    adapter = host()
 
     cli = (cfg.get("mumu", "cli", default="") or "").strip()
-    if not os.path.isfile(cli):
-        found = _find_mumu_cli()
+    if not _path_ready(cli):
+        found = adapter.find_mumu_cli()
         if found:
             cfg.set(found, "mumu", "cli")
-            cfg.set(os.path.join(os.path.dirname(found), "adb.exe"), "mumu", "adb")
+            adb = adapter.find_mumu_adb(found)
+            if adb:
+                cfg.set(adb, "mumu", "adb")
             changed.append("MuMu 模拟器：%s" % found)
         else:
-            missing.append("MuMu 模拟器（mumu-cli.exe）")
+            missing.append(adapter.missing_mumu_label())
+
+    adb = (cfg.get("mumu", "adb", default="") or "").strip()
+    if not _path_ready(adb):
+        found_adb = adapter.find_mumu_adb(cfg.get("mumu", "cli", default=""))
+        if found_adb:
+            cfg.set(found_adb, "mumu", "adb")
+            changed.append("adb：%s" % found_adb)
 
     maa = (cfg.get("maa", "exe", default="") or "").strip()
-    if not os.path.isfile(maa):
-        found = _find_maa_exe()
+    if not _path_ready(maa):
+        found = adapter.find_maa_exe(APP_DIR)
         if found:
             cfg.set(found, "maa", "exe")
             changed.append("MAA 主程序：%s" % found)
         else:
-            missing.append("MAA 主程序（MAA.exe）")
+            missing.append(adapter.missing_maa_label())
 
     if changed:
         cfg.save()
@@ -486,55 +479,50 @@ def _append_file_log(level: str, msg: str):
 def mumu_info(cfg: Config):
     """读取模拟器实例状态，返回 dict。"""
     cli = cfg.get("mumu", "cli", default="")
-    rc, out, err = run_cmd([cli, "info", "-v", str(cfg.vm_index)], timeout=25)
-    if rc != 0:
-        raise PipelineError("读取模拟器状态失败：%s" % (err.strip() or out.strip() or "未知错误"))
-    start = out.find("{")
-    if start < 0:
-        raise PipelineError("模拟器状态返回异常：%s" % out.strip()[:200])
     try:
-        return json.loads(out[start:])
-    except Exception as exc:
+        return host().mumu_info(cli, cfg.vm_index)
+    except RuntimeError as exc:
+        raise PipelineError("读取模拟器状态失败：%s" % exc)
+    except ValueError as exc:
         raise PipelineError("解析模拟器状态失败：%s" % exc)
 
 
 def mumu_control(cfg: Config, action: str):
     cli = cfg.get("mumu", "cli", default="")
-    rc, out, err = run_cmd([cli, "control", "-v", str(cfg.vm_index), action], timeout=60)
-    return rc, (out + err).strip()
+    return host().mumu_control(cli, cfg.vm_index, action)
 
 
 def mumu_main(action: str, cli: str):
-    """控制 MuMu 管理器本体（main close / main launch）。"""
+    """控制 MuMu 管理器本体（Windows: main close；macOS: 退出管理器 App）。"""
+    if action == "close":
+        return host().mumu_close_manager(cli)
     rc, out, err = run_cmd([cli, "main", action], timeout=60)
     return rc, (out + err).strip()
 
 
 def post_close_to_pid(pid: int) -> int:
-    """给指定进程的所有顶层窗口发 WM_CLOSE，让它自己走正常退出流程。
+    """温和请求进程退出：Windows 发 WM_CLOSE，其他平台 SIGTERM / AppleScript。
 
     比直接 terminate() 温和：程序有机会保存配置、清理临时文件。
-    返回成功投递的窗口数量。
+    返回成功投递/尝试的次数。
     """
-    user32 = ctypes.windll.user32
-    WM_CLOSE = 0x0010
-    count = 0
-
-    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-    def _enum(hwnd, _lparam):
-        nonlocal count
-        wpid = ctypes.wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
-        if wpid.value == pid:
-            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
-            count += 1
-        return True
-
     try:
-        user32.EnumWindows(_enum, 0)
+        return host().close_pid_gracefully(int(pid))
     except Exception:
-        pass
-    return count
+        return 0
+
+
+def resolve_adb_address(cfg: Config, info=None) -> str:
+    """用户填了就用；否则交给平台（Windows 公式 / Mac 从 mumutool info 读端口）。"""
+    addr = (cfg.get("mumu", "adb_address", default="") or "").strip()
+    if addr:
+        return addr
+    if info is None:
+        try:
+            info = mumu_info(cfg)
+        except PipelineError:
+            info = None
+    return host().default_adb_address(cfg.vm_index, info=info)
 
 
 # ============================================================ MAA 控制
@@ -593,10 +581,21 @@ def inject_maa_profile(cfg: Config, log, account_name=""):
     """
     maa_dir = cfg.maa_dir
     maa_exe = cfg.maa_exe
-    if not os.path.exists(maa_exe):
+    adapter = host()
+    if not _path_ready(maa_exe):
         raise PipelineError("找不到 MAA 主程序：%s" % maa_exe)
 
-    cfg_path = os.path.join(maa_dir, "config", "gui.new.json")
+    if not adapter.uses_gui_inject(maa_exe):
+        from plat import maa_cli
+        return maa_cli.inject_cli(
+            cfg,
+            log,
+            account_name,
+            connect_config=adapter.maa_connect_config,
+            adb_address=resolve_adb_address(cfg),
+        )
+
+    cfg_path = adapter.maa_config_path(maa_dir)
     if not os.path.exists(cfg_path):
         raise PipelineError("找不到 MAA 配置文件：%s" % cfg_path)
 
@@ -624,9 +623,9 @@ def inject_maa_profile(cfg: Config, log, account_name=""):
     startup["SkipStartupAutoRunAfterUpdate"] = True
 
     connect = profile["Gui"].setdefault("ConnectSettings", {})
-    connect["Config"] = "MuMuEmulator12"
+    connect["Config"] = host().maa_connect_config
     connect["AdbPath"] = cfg.get("mumu", "adb", default="")
-    connect["Address"] = cfg.adb_address
+    connect["Address"] = resolve_adb_address(cfg)
     connect["AutoDetect"] = False
 
     account_name = (account_name or "").strip()
@@ -656,7 +655,7 @@ def inject_maa_profile(cfg: Config, log, account_name=""):
 def restore_maa_current(cfg: Config, prev_current, log):
     if prev_current is None:
         return
-    cfg_path = os.path.join(cfg.maa_dir, "config", "gui.new.json")
+    cfg_path = host().maa_config_path(cfg.maa_dir)
     try:
         with open(cfg_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -726,13 +725,19 @@ class Engine:
         with self.lock:
             snap = json.loads(json.dumps(self.state, ensure_ascii=False))
         snap["config_summary"] = {
+            "platform": host().name,
+            "platform_label": host().display_name,
             "vm_index": self.cfg.vm_index,
             "adb_address": self.cfg.adb_address,
+            "mumu_cli": self.cfg.get("mumu", "cli", default=""),
+            "mumu_adb": self.cfg.get("mumu", "adb", default=""),
             "ready_timeout": self.cfg.get("mumu", "ready_timeout", default=180),
             "shutdown_after_complete": self.cfg.get("mumu", "shutdown_after_complete", default=True),
             "close_manager": self.cfg.get("mumu", "close_manager", default=True),
             "maa_exe": self.cfg.maa_exe,
             "maa_profile": self.cfg.get("maa", "profile", default=""),
+            "maa_backend": "cli" if host().is_maa_cli(self.cfg.maa_exe) else "gui",
+            "maa_cli_config_dir": self.cfg.get("maa", "cli_config_dir", default=""),
             "maa_close_after_complete": self.cfg.get("maa", "close_after_complete", default=True),
             "maa_close_delay": self.cfg.get("maa", "close_delay", default=10),
             "accounts": normalized_accounts(self.cfg),
@@ -917,8 +922,10 @@ class Engine:
         adb = self.cfg.get("mumu", "adb", default="")
         maa = self.cfg.maa_exe
 
-        for label, path in (("模拟器 CLI", cli), ("adb", adb), ("MAA 主程序", maa)):
-            if not path or not os.path.exists(path):
+        adapter = host()
+        self.log("info", "当前平台：%s" % adapter.display_name)
+        for label, path in ((adapter.mumu_cli_label, cli), ("adb", adb), (adapter.maa_label, maa)):
+            if not _path_ready(path):
                 raise PipelineError("找不到%s：%s（请在配置文件里修正路径）" % (label, path))
         self.log("ok", "环境自检通过")
         self.log("info", "模拟器 CLI %s" % cli)
@@ -991,7 +998,18 @@ class Engine:
     def _phase_adb(self):
         self._begin_phase("adb")
         adb = self.cfg.get("mumu", "adb", default="")
-        addr = self.cfg.adb_address
+        try:
+            info = mumu_info(self.cfg)
+        except PipelineError:
+            info = None
+        addr = resolve_adb_address(self.cfg, info=info)
+        if not addr:
+            raise PipelineError(
+                "无法确定 ADB 地址。请在设置里填写「ADB 地址」，"
+                "或确认 mumutool info 能返回该实例的端口（Mac 不是 Windows 的 16384+32×索引）"
+            )
+        if addr != (self.cfg.adb_address or ""):
+            self.log("info", "从模拟器状态推导 ADB 地址：%s" % addr)
         run_cmd([adb, "start-server"], timeout=30)
         rc, out, err = run_cmd([adb, "connect", addr], timeout=30)
         text = (out + err).strip()
@@ -1124,21 +1142,32 @@ class Engine:
         if self._prev_current is None:
             self._prev_current = prev
 
-        log_path = os.path.join(self.cfg.maa_dir, "debug", "gui.log")
+        adapter = host()
+        log_path = adapter.maa_log_path(self.cfg.maa_dir)
         self._maasession_pos = os.path.getsize(log_path) if os.path.exists(log_path) else 0
 
         profile_name = self.cfg.get("maa", "profile", default="")
-        self.log("info", "拉起 MAA：--config %s" % profile_name)
-        try:
-            self.maa_proc = subprocess.Popen(
-                [self.cfg.maa_exe, "--config", profile_name],
-                cwd=self.cfg.maa_dir,
+        argv = adapter.maa_argv(self.cfg.maa_exe, profile_name)
+        cwd = adapter.maa_cwd(self.cfg.maa_exe, self.cfg.maa_dir)
+        self.log("info", "拉起 MAA：%s" % " ".join(argv[1:] if argv else []))
+        popen_kw = {"cwd": cwd or None}
+        if adapter.maa_exits_when_done(self.cfg.maa_exe):
+            popen_kw.update(
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
             )
+        try:
+            self.maa_proc = subprocess.Popen(argv, **popen_kw)
         except Exception as exc:  # noqa: BLE001
             raise PipelineError("启动 MAA 失败：%s" % exc)
         self._set(maa="已拉起")
 
-        if self.cfg.get("maa", "mirror_logs", default=True):
+        if self.maa_proc.stdout is not None:
+            self._tail_thread = threading.Thread(target=self._tail_maa_stdout, daemon=True)
+            self._tail_thread.start()
+        elif self.cfg.get("maa", "mirror_logs", default=True):
             self._tail_thread = threading.Thread(
                 target=self._tail_maa_log, args=(log_path,), daemon=True
             )
@@ -1161,7 +1190,12 @@ class Engine:
                     started = True
                     break
             if self.maa_proc.poll() is not None:
-                raise PipelineError("MAA 进程已退出（退出码 %s）" % self.maa_proc.returncode)
+                rc = self.maa_proc.returncode
+                if adapter.maa_exits_when_done(self.cfg.maa_exe) and rc == 0:
+                    self._completed = True
+                    started = True
+                    break
+                raise PipelineError("MAA 进程已退出（退出码 %s）" % rc)
             time.sleep(1)
 
         if started:
@@ -1193,6 +1227,14 @@ class Engine:
         done_at = None
         while not self.stop_evt.is_set():
             if self.maa_proc is None or self.maa_proc.poll() is not None:
+                if (
+                    self.maa_proc is not None
+                    and self.maa_proc.returncode == 0
+                    and host().maa_exits_when_done(self.cfg.maa_exe)
+                    and not self._completed
+                ):
+                    self._completed = True
+                    self.log("ok", "maa-cli 已退出 (0)，视为任务完成")
                 break
             # 关键：MAA 报「任务已全部完成」后 GUI 进程并不会自己退出。
             # 必须在这里主动收尾，否则会一直空转等进程退出（旧版本即如此，
@@ -1320,6 +1362,23 @@ class Engine:
         recent[msg] = now
         self.log(level, msg)
 
+    def _tail_maa_stdout(self):
+        """跟随 maa-cli 的 stdout（它不写 gui.log）。"""
+        proc = self.maa_proc
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            for raw in proc.stdout:
+                if self.stop_evt.is_set():
+                    break
+                if isinstance(raw, bytes):
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                else:
+                    line = raw.rstrip("\r\n")
+                self._handle_maa_line(line)
+        except Exception:
+            pass
+
     def _tail_maa_log(self, path):
         """跟随 MAA 日志。只要 MAA 还活着就持续跟随，不会因为战斗期间日志安静而提前退出。"""
         pos = self._maasession_pos
@@ -1357,6 +1416,14 @@ class Engine:
             return
         match = self.RE_LOG_LINE.match(line.strip())
         if not match:
+            # maa-cli 等非 GUI 日志：仍识别完成与切号
+            if self.RE_ALL_DONE.search(line):
+                self._completed = True
+                self._log_maa("ok", "MAA：任务已全部完成")
+                self._set(task="全部完成")
+            elif "AccountSwitch" in line or "切换账号" in line:
+                self._started_evidence = True
+                self._log_maa("ok", "MAA：%s" % line.strip()[:200], window=8.0)
             return
         level, _cls, body = match.groups()
         body = body.strip()
@@ -1853,6 +1920,9 @@ def notify_all(title: str, body: str, cfg: Config, bus=None, only=None) -> list:
             tray.notify(title, body)
             results.append({"channel": "desktop", "label": CHANNEL_LABELS["desktop"],
                             "ok": True, "detail": "已弹出托盘提示"})
+        elif host().desktop_notify(title, body):
+            results.append({"channel": "desktop", "label": CHANNEL_LABELS["desktop"],
+                            "ok": True, "detail": "已发送系统通知"})
         else:
             results.append({"channel": "desktop", "label": CHANNEL_LABELS["desktop"],
                             "ok": False, "detail": "托盘未启用"})
@@ -2149,15 +2219,9 @@ def has_pywebview() -> bool:
 
 
 def _focus_by_win32(title: str) -> bool:
-    """兜底：直接让系统把同名顶层窗口抬到最前，不依赖 pywebview 的实现细节。"""
+    """按平台唤起已有窗口（Windows 走 Win32，其他系统走适配器）。"""
     try:
-        u = ctypes.windll.user32
-        hwnd = u.FindWindowW(None, title)
-        if not hwnd:
-            return False
-        u.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
-        u.SetForegroundWindow(hwnd)
-        return True
+        return host().focus_window(title)
     except Exception:  # noqa: BLE001
         return False
 
@@ -2185,9 +2249,9 @@ def _load_icon_handle(cx: int):
 class NativeWindow:
     """把网页界面装进原生窗口，用起来更接近 MAA 这类桌面程序。
 
-    - 关掉窗口不退出：最小化到托盘，挂机与定时继续在后台跑
-    - 托盘双击 / 菜单「打开界面」：唤起同一个窗口，不会越开越多
-    - 已有实例在跑时再次双击：唤起那个实例的窗口
+    - 关掉窗口不退出：最小化到托盘 / 菜单栏，挂机与定时继续在后台跑
+    - 托盘 / 菜单栏「显示主界面」：唤起同一个窗口，不会越开越多
+    - 已有实例在跑时再次启动：唤起那个实例的窗口
     """
 
     def __init__(self, url: str, cfg: Config, bus: Bus):
@@ -2219,18 +2283,13 @@ class NativeWindow:
 
     def _on_gui_ready(self):
         try:
-            u = ctypes.windll.user32
-            hwnd = u.FindWindowW(None, WINDOW_TITLE)
-            if hwnd:
-                big = _load_icon_handle(32)
-                small = _load_icon_handle(16)
-                if big:
-                    u.SendMessageW(hwnd, 0x80, 1, big)    # WM_SETICON / ICON_BIG
-                if small:
-                    u.SendMessageW(hwnd, 0x80, 0, small)  # WM_SETICON / ICON_SMALL
+            host().apply_window_icon(WINDOW_TITLE, _icon_path())
         except Exception:  # noqa: BLE001
             pass
-        self.bus.log("info", "原生窗口已打开（关闭窗口 = 最小化到托盘）")
+        if host().tray_supported() and self.keep_in_tray:
+            self.bus.log("info", "原生窗口已打开（关闭窗口 = 最小化到托盘）")
+        else:
+            self.bus.log("info", "原生窗口已打开（关闭窗口后程序仍在后台，再次启动可唤起）")
 
     def _on_closing(self):
         if not self.keep_in_tray:
@@ -2240,7 +2299,10 @@ class NativeWindow:
         except Exception as exc:  # noqa: BLE001
             self.bus.log("warn", "窗口隐藏失败，改为直接退出：%s" % exc)
             return True
-        self.bus.log("info", "窗口已最小化到托盘（双击托盘图标可重新打开）")
+        if host().name == "macos":
+            self.bus.log("info", "窗口已最小化到菜单栏，挂机与定时仍在后台运行")
+        else:
+            self.bus.log("info", "窗口已最小化到托盘（双击托盘图标可重新打开）")
         tray = TRAY_INSTANCE
         if tray is not None and getattr(tray, "active", False):
             tray.notify(WINDOW_TITLE, "已最小化到托盘，挂机与定时仍在后台运行")
@@ -2399,7 +2461,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/open-logs":
             try:
-                os.startfile(LOG_DIR)
+                host().open_folder(LOG_DIR)
             except Exception:
                 pass
             self._json({"ok": True})
@@ -2499,18 +2561,20 @@ def selftest() -> int:
     autodetect_paths(cfg)
 
     def check(label, path):
-        ok = bool(path) and os.path.exists(path)
+        ok = _path_ready(path)
         print("  [%s] %-14s %s" % ("OK" if ok else "!!", label, path))
         if not ok:
             problems.append("%s 路径无效：%s" % (label, path))
         return ok
 
+    print("  [i] 平台 %s" % host().display_name)
+
     print("\n[1] 依赖路径")
-    check("模拟器 CLI", cfg.get("mumu", "cli", default=""))
+    check(host().mumu_cli_label, cfg.get("mumu", "cli", default=""))
     check("adb", cfg.get("mumu", "adb", default=""))
-    check("MAA 主程序", cfg.maa_exe)
+    check(host().maa_label, cfg.maa_exe)
     print("  [i] MAA 目录 %s" % cfg.maa_dir)
-    print("  [i] ADB 地址 %s" % cfg.adb_address)
+    print("  [i] ADB 地址 %s" % (cfg.adb_address or "（留空，运行时从模拟器状态推导）"))
     accs = enabled_accounts(cfg)
     if accs:
         print("  [i] 多账号顺序挂机：%s" % "、".join(
@@ -2520,16 +2584,31 @@ def selftest() -> int:
         print("  [i] 未配置多账号（按当前登录号跑一轮）")
 
     print("\n[2] MAA 配置文件")
-    cfg_path = os.path.join(cfg.maa_dir, "config", "gui.new.json")
-    if os.path.exists(cfg_path):
-        with open(cfg_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        confs = list((data.get("Configurations") or {}).keys())
-        print("  [OK] 找到 gui.new.json，现有配置：%s" % "、".join(confs))
-        print("  [i] 当前激活配置：%s" % data.get("Current"))
+    if host().uses_gui_inject(cfg.maa_exe):
+        cfg_path = host().maa_config_path(cfg.maa_dir)
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            confs = list((data.get("Configurations") or {}).keys())
+            print("  [OK] 找到 gui.new.json，现有配置：%s" % "、".join(confs))
+            print("  [i] 当前激活配置：%s" % data.get("Current"))
+            print("  [i] 后端 GUI：多账号写入开始唤醒 account_name")
+        else:
+            print("  [!!] 找不到 %s" % cfg_path)
+            problems.append("MAA 配置文件缺失")
     else:
-        print("  [!!] 找不到 %s" % cfg_path)
-        problems.append("MAA 配置文件缺失")
+        from plat import maa_cli
+        cli_dir = maa_cli.resolve_cli_config_dir(
+            cfg.maa_exe, cfg.get("maa", "cli_config_dir", default="")
+        )
+        print("  [i] 后端 maa-cli：配置目录 %s" % cli_dir)
+        print("  [i] 启动：maa -p pipeline run pipeline_farm")
+        print("  [i] 多账号写入 tasks/pipeline_farm.json 的 StartUp.account_name")
+        farm = os.path.join(cli_dir, "tasks", maa_cli.CLI_TASK + ".json")
+        if os.path.exists(farm):
+            print("  [OK] 已有 %s" % farm)
+        else:
+            print("  [i] 尚未写入 pipeline_farm.json（首次挂机时按账号注入）")
 
     print("\n[3] 模拟器状态")
     try:
@@ -2543,63 +2622,13 @@ def selftest() -> int:
 
     print("\n[4] MAA 进程")
     running = process_running("MAA.exe")
-    print("  [%s] MAA.exe %s" % ("i" if running else "OK", "正在运行（执行流水线前需关闭）" if running else "未运行，可以执行"))
+    print("  [%s] MAA %s" % ("i" if running else "OK", "正在运行（执行流水线前需关闭）" if running else "未运行，可以执行"))
 
     print("\n[5] 托盘图标")
-    try:
-        u = ctypes.windll.user32
-        u.DefWindowProcW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
-        u.DefWindowProcW.restype = LRESULT
-        u.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
-        u.RegisterClassW.restype = wt.ATOM
-        u.CreateWindowExW.argtypes = [
-            wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD,
-            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-            wt.HWND, wt.HMENU, wt.HINSTANCE, ctypes.c_void_p,
-        ]
-        u.CreateWindowExW.restype = wt.HWND
-        u.LoadIconW.argtypes = [wt.HINSTANCE, ctypes.c_void_p]
-        u.LoadIconW.restype = wt.HICON
-        u.DestroyWindow.argtypes = [wt.HWND]
-        size = ctypes.sizeof(NOTIFYICONDATAW)
-        print("  [i] NOTIFYICONDATAW 大小 = %d 字节（x64 期望 976）" % size)
-        hinst = ctypes.windll.kernel32.GetModuleHandleW(None)
-
-        def _st_wndproc(hwnd, msg, wparam, lparam):
-            return u.DefWindowProcW(hwnd, msg, wparam, lparam)
-
-        cb = WNDPROC(_st_wndproc)
-        wc = WNDCLASSW()
-        wc.lpfnWndProc = cb
-        wc.hInstance = hinst
-        wc.lpszClassName = "MAAPipelineSelfTest"
-        atom = u.RegisterClassW(ctypes.byref(wc))
-        print("  [i] RegisterClass 返回 atom = %s" % atom)
-        hwnd = u.CreateWindowExW(
-            0, "MAAPipelineSelfTest", "t", 0, 0, 0, 0, 0, None, None, hinst, None
-        )
-        if hwnd:
-            nid = NOTIFYICONDATAW()
-            nid.cbSize = size
-            nid.hWnd = hwnd
-            nid.uID = 99
-            nid.uFlags = NIF_ICON | NIF_TIP
-            nid.hIcon = u.LoadIconW(None, ctypes.c_void_p(IDI_APPLICATION))
-            nid.szTip = "selftest"
-            added = ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
-            if added:
-                ctypes.windll.shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
-                print("  [OK] 托盘图标创建成功（已移除测试图标）")
-            else:
-                print("  [!!] Shell_NotifyIcon 返回失败")
-                problems.append("托盘图标不可用")
-            u.DestroyWindow(hwnd)
-        else:
-            print("  [!!] 隐藏窗口创建失败（atom=%s）" % atom)
-            problems.append("托盘隐藏窗口创建失败")
-    except Exception as exc:  # noqa: BLE001
-        print("  [!!] 托盘自检异常：%s" % exc)
-        problems.append("托盘自检异常")
+    _ok, lines, tray_problems = host().selftest_tray()
+    for line in lines:
+        print(line)
+    problems.extend(tray_problems)
 
     print("\n[6] 界面文件")
     print("  [%s] ui.html %s" % ("OK" if os.path.exists(UI_PATH) else "!!", UI_PATH))
@@ -2747,8 +2776,35 @@ def main():
         )
 
     if not no_tray and cfg.get("tray", "enabled", default=True):
-        TRAY_INSTANCE = Tray(cfg, engine, bus, url)
-        TRAY_INSTANCE.start()
+        hooks = {
+            "open": lambda: open_interface(url),
+            "run": lambda: engine.start("full"),
+            "abort": engine.abort,
+            "quit": lambda: (
+                bus.log("info", "从托盘退出"),
+                threading.Thread(target=_shutdown, daemon=True).start(),
+            ),
+            "notify_fallback": lambda title, body: host().desktop_notify(title, body),
+        }
+        plat_tray = None
+        try:
+            plat_tray = host().create_tray(hooks)
+        except Exception as exc:  # noqa: BLE001
+            bus.log("warn", "平台托盘创建失败：%s" % exc)
+        if plat_tray is not None:
+            TRAY_INSTANCE = plat_tray
+            try:
+                TRAY_INSTANCE.start()
+                bus.log("info", "菜单栏托盘已就绪（显示主界面 / 立即挂机 / 中止 / 退出）")
+            except Exception as exc:  # noqa: BLE001
+                bus.log("warn", "菜单栏托盘初始化失败（不影响主功能）：%s" % exc)
+                TRAY_INSTANCE = _NotifyOnlyTray()
+        elif host().tray_supported():
+            TRAY_INSTANCE = Tray(cfg, engine, bus, url)
+            TRAY_INSTANCE.start()
+        else:
+            TRAY_INSTANCE = _NotifyOnlyTray()
+            bus.log("info", "当前平台无菜单栏托盘，桌面通知走系统通知；关窗口后再次启动可唤起已有实例")
 
     try:
         if mode == "window":
@@ -2838,12 +2894,28 @@ def _report_fatal(exc: BaseException) -> str:
     )
 
 
+class _NotifyOnlyTray:
+    """没有 Win32 托盘时的占位：只负责桌面通知，active=True 让 notify_all 走系统通道。"""
+
+    def __init__(self):
+        self.active = True
+
+    def start(self):
+        return
+
+    def notify(self, title: str, body: str):
+        host().desktop_notify(title, body)
+
+    def stop(self):
+        self.active = False
+
+
 def _show_error_box(text: str):
     """用系统原生弹窗报错，不依赖任何第三方库，pythonw 下也能看见。"""
     if os.environ.get("MAAPIPE_NO_MSGBOX"):
         return
     try:
-        ctypes.windll.user32.MessageBoxW(None, text, "MAA 一键挂机 - 启动失败", 0x10)
+        host().show_error_box(text, "MAA 一键挂机 - 启动失败")
     except Exception:  # noqa: BLE001
         pass
 

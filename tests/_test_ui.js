@@ -11,9 +11,13 @@ const SAMPLE = {
   mumu: "未知", adb: "未知", maa: "未运行", task: "—", server: "http://127.0.0.1:17800",
   phases: {},
   config_summary: {
+    platform: "windows", platform_label: "Windows",
     vm_index: 0, adb_address: "", ready_timeout: 180, shutdown_after_complete: true,
     close_manager: true,
+    mumu_cli: "C:\\Program Files\\Netease\\MuMu\\nx_main\\mumu-cli.exe",
+    mumu_adb: "C:\\Program Files\\Netease\\MuMu\\nx_main\\adb.exe",
     maa_exe: "C:\\MAA\\MAA.exe", maa_profile: "挂机流水线",
+    maa_backend: "gui", maa_cli_config_dir: "",
     maa_close_after_complete: true, maa_close_delay: 10,
     accounts: [
       {name: "官服主号", account_name: "4567", enabled: true},
@@ -74,6 +78,7 @@ setTimeout(() => {
   ok(doc.getElementById("c-email-smtp_host").value === "smtp.qq.com", "邮件字段回填正确");
   ok(doc.getElementById("c-qmsg-type").value === "group", "Qmsg 发送方式回填正确");
   ok(doc.getElementById("c-webhook-format").value === "通用 JSON", "Webhook 格式回填正确");
+  ok(!!doc.getElementById("c-cli-dir"), "渲染 maa-cli 配置目录字段");
 
   console.log("=== 2. 增删时间点 ===");
   doc.getElementById("btn-add-time").click();
@@ -105,6 +110,7 @@ setTimeout(() => {
   ok(out.mumu.close_manager === true, "关闭 MuMu 管理器开关收集正确");
   ok(out.maa.close_after_complete === true && out.maa.close_delay === 10,
      "MAA 完成后自动关闭与其延迟收集正确", out.maa);
+  ok(out.maa.cli_config_dir === "", "maa-cli 配置目录可收集（默认为空）");
   ok(Array.isArray(out.maa.accounts) && out.maa.accounts.length === 2, "收集到 2 个账号", out.maa.accounts);
   ok(out.maa.accounts[0].name === "官服主号" && out.maa.accounts[0].account_name === "4567" && out.maa.accounts[0].enabled === true,
      "第一个账号字段正确", out.maa.accounts[0]);
@@ -126,12 +132,15 @@ setTimeout(() => {
   console.log("=== 5. 往返一致性：收集 → 回填 → 再收集 ===");
   const round = JSON.parse(JSON.stringify(out));
   round.vm_index = out.mumu.vm_index;
+  round.mumu_cli = out.mumu.cli;
+  round.mumu_adb = out.mumu.adb;
   round.adb_address = out.mumu.adb_address;
   round.ready_timeout = out.mumu.ready_timeout;
   round.shutdown_after_complete = out.mumu.shutdown_after_complete;
   round.close_manager = out.mumu.close_manager;
   round.maa_exe = out.maa.exe;
   round.maa_profile = out.maa.profile;
+  round.maa_cli_config_dir = out.maa.cli_config_dir;
   round.maa_close_after_complete = out.maa.close_after_complete;
   round.maa_close_delay = out.maa.close_delay;
   round.accounts = out.maa.accounts;
