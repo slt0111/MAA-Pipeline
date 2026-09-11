@@ -5,8 +5,8 @@
 
 VSVersionInfo(
     ffi=FixedFileInfo(
-        filevers=(1, 3, 0, 0),
-        prodvers=(1, 3, 0, 0),
+        filevers=(1, 4, 0, 0),
+        prodvers=(1, 4, 0, 0),
         mask=0x3F,
         flags=0x0,
         OS=0x40004,
@@ -22,12 +22,12 @@ VSVersionInfo(
                     [
                         StringStruct("CompanyName", "MAA-Pipeline"),
                         StringStruct("FileDescription", "MAA 一键挂机助手"),
-                        StringStruct("FileVersion", "1.3.0.0"),
+                        StringStruct("FileVersion", "1.4.0.0"),
                         StringStruct("InternalName", "MAA挂机助手"),
                         StringStruct("LegalCopyright", ""),
                         StringStruct("OriginalFilename", "MAA挂机助手.exe"),
                         StringStruct("ProductName", "MAA 一键挂机"),
-                        StringStruct("ProductVersion", "1.3.0.0"),
+                        StringStruct("ProductVersion", "1.4.0.0"),
                     ],
                 )
             ]
