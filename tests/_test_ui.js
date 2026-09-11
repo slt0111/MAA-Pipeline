@@ -15,6 +15,10 @@ const SAMPLE = {
     close_manager: true,
     maa_exe: "C:\\MAA\\MAA.exe", maa_profile: "挂机流水线",
     maa_close_after_complete: true, maa_close_delay: 10,
+    accounts: [
+      {name: "官服主号", account_name: "4567", enabled: true},
+      {name: "B服小号", account_name: "张三", enabled: false}
+    ],
     schedule: { enabled: true, times: ["08:00", "20:00"], days: [0, 1, 2, 3, 4, 5], only_if_idle: true },
     notify: {
       desktop: true,
@@ -101,6 +105,23 @@ setTimeout(() => {
   ok(out.mumu.close_manager === true, "关闭 MuMu 管理器开关收集正确");
   ok(out.maa.close_after_complete === true && out.maa.close_delay === 10,
      "MAA 完成后自动关闭与其延迟收集正确", out.maa);
+  ok(Array.isArray(out.maa.accounts) && out.maa.accounts.length === 2, "收集到 2 个账号", out.maa.accounts);
+  ok(out.maa.accounts[0].name === "官服主号" && out.maa.accounts[0].account_name === "4567" && out.maa.accounts[0].enabled === true,
+     "第一个账号字段正确", out.maa.accounts[0]);
+  ok(out.maa.accounts[1].enabled === false && out.maa.accounts[1].account_name === "张三",
+     "停用账号也会被保存（只是不跑）", out.maa.accounts[1]);
+
+  console.log("=== 2b. 增删与调序账号 ===");
+  doc.getElementById("btn-add-acc").click();
+  ok(doc.querySelectorAll(".accrow").length === 3, "添加后 3 行账号");
+  const newAcc = doc.querySelectorAll(".accrow")[2];
+  newAcc.querySelector(".acc-name").value = "第三号";
+  newAcc.querySelector(".acc-frag").value = "8901";
+  newAcc.querySelector(".acc-up").click();
+  const mid = win.collectCfg().maa.accounts;
+  ok(mid[1].name === "第三号" && mid[2].name === "B服小号", "上移后顺序正确", mid);
+  newAcc.querySelector(".acc-del").click();
+  ok(doc.querySelectorAll(".accrow").length === 2, "删除后回到 2 行");
 
   console.log("=== 5. 往返一致性：收集 → 回填 → 再收集 ===");
   const round = JSON.parse(JSON.stringify(out));
@@ -113,6 +134,7 @@ setTimeout(() => {
   round.maa_profile = out.maa.profile;
   round.maa_close_after_complete = out.maa.close_after_complete;
   round.maa_close_delay = out.maa.close_delay;
+  round.accounts = out.maa.accounts;
   win.buildCfg(round, out.schedule, out.notify);
   const again = win.collectCfg();
   const same = JSON.stringify(again) === JSON.stringify(out);
