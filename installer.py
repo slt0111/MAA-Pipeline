@@ -205,7 +205,7 @@ def create_lnk(target: str, lnk_path: str, workdir: str, desc: str, icon: str) -
 def write_uninstall_key(install_dir: str):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_REG) as k:
         winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "MAA 挂机助手")
-        winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "1.2.0")
+        winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, "1.3.0")
         winreg.SetValueEx(k, "DisplayIcon", 0, winreg.REG_SZ,
                           os.path.join(install_dir, EXE_NAME))
         winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, install_dir)
