@@ -110,6 +110,7 @@ setTimeout(() => {
   ok(out.mumu.close_manager === true, "关闭 MuMu 管理器开关收集正确");
   ok(out.maa.close_after_complete === true && out.maa.close_delay === 10,
      "MAA 完成后自动关闭与其延迟收集正确", out.maa);
+  ok(out.maa.cli_config_dir === "", "maa-cli 配置目录可收集（默认为空）");
   ok(Array.isArray(out.maa.accounts) && out.maa.accounts.length === 2, "收集到 2 个账号", out.maa.accounts);
   ok(out.maa.accounts[0].name === "官服主号" && out.maa.accounts[0].account_name === "4567" && out.maa.accounts[0].enabled === true,
      "第一个账号字段正确", out.maa.accounts[0]);
