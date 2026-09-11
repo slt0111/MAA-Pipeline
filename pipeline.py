@@ -688,6 +688,7 @@ class Engine:
         self._maasession_pos = 0
         self._maa_pending = ""        # 未读完的日志残行
         self._maa_recent = {}         # 去重：消息 -> 上次播报时间
+        self._account_results = []    # 多账号本轮结果：{name, account_name, ok, error}
         self.state = {
             "running": False,
             "mode": None,
@@ -735,6 +736,7 @@ class Engine:
             "maa_close_after_complete": self.cfg.get("maa", "close_after_complete", default=True),
             "maa_close_delay": self.cfg.get("maa", "close_delay", default=10),
             "accounts": normalized_accounts(self.cfg),
+            "account_results": list(self._account_results),
             "schedule": normalized_schedule(self.cfg),
             "notify": normalized_notify(self.cfg),
             "notify_desktop": self.cfg.get("notify", "desktop", default=True),
@@ -788,6 +790,7 @@ class Engine:
         self._connect_failed = False
         self._maa_pending = ""
         self._maa_recent = {}
+        self._account_results = []
         self._reset_phases(mode)
         self._set(
             running=True,
@@ -816,6 +819,12 @@ class Engine:
             if mode in ("full", "maa"):
                 self._phase_maa()
                 self._phase_wrap()
+                # 多账号有失败时不把整轮标成成功（单账号仍保持原来的「没跑完也不算失败」）
+                summary_err = self._account_failure_message()
+                if summary_err:
+                    ok = False
+                    err = summary_err
+                    self.log("error", err)
             else:
                 self.log("ok", "模拟器已就绪，可以开始挂机了")
         except PipelineError as exc:
@@ -839,7 +848,7 @@ class Engine:
                 self.state["last_error"] = err
                 self.state["last_run"] = dt.datetime.now().strftime("%m-%d %H:%M")
                 self.state["runs"] += 1
-                self.state["last_result"] = "成功" if ok else "失败"
+                self.state["last_result"] = self._result_label(ok)
                 for key, status in self.state["phases"].items():
                     if status == "active":
                         self.state["phases"][key] = "done" if ok else "failed"
@@ -849,19 +858,51 @@ class Engine:
                 "══ 流水线结束，用时 %s ══" % _fmt_duration(elapsed),
             )
             if self.cfg.get("notify", "desktop", default=True):
-                title = "MAA 挂机完成" if ok else "MAA 挂机异常"
-                if ok:
-                    accs = enabled_accounts(self.cfg)
-                    if len(accs) > 1:
-                        body = "用时 %s，完成 %d 个账号" % (_fmt_duration(elapsed), len(accs))
-                    else:
-                        body = "用时 %s" % _fmt_duration(elapsed)
-                else:
-                    body = err[:120]
+                title, body = self._notify_copy(ok, elapsed, err)
                 notify(title, body, self.cfg)
 
     def _mode_name(self, mode):
         return {"full": "一键挂机", "emu": "仅启动模拟器", "maa": "仅启动 MAA"}.get(mode, mode)
+
+    def _result_label(self, ok: bool) -> str:
+        if ok:
+            return "成功"
+        results = self._account_results or []
+        if len(results) > 1 and any(item.get("ok") for item in results) and any(not item.get("ok") for item in results):
+            return "部分失败"
+        return "失败"
+
+    def _format_account_summary(self) -> str:
+        results = self._account_results or []
+        if not results:
+            return ""
+        ok_n = sum(1 for item in results if item.get("ok"))
+        failed = [item.get("name") or item.get("account_name") or "未命名" for item in results if not item.get("ok")]
+        if not failed:
+            return "完成 %d 个账号" % ok_n
+        return "完成 %d/%d 个账号，失败：%s" % (ok_n, len(results), "、".join(failed))
+
+    def _account_failure_message(self) -> str:
+        """多账号有失败时返回摘要；空列表 / 单账号返回空，保持历史「没跑完也不算整轮失败」。"""
+        results = self._account_results or []
+        if len(results) <= 1:
+            return ""
+        if any(not item.get("ok") for item in results):
+            return self._format_account_summary()
+        return ""
+
+    def _notify_copy(self, ok: bool, elapsed: int, err: str) -> tuple:
+        dur = _fmt_duration(elapsed)
+        if ok:
+            accs = enabled_accounts(self.cfg)
+            if len(accs) > 1:
+                return "MAA 挂机完成", "用时 %s，完成 %d 个账号" % (dur, len(accs))
+            return "MAA 挂机完成", "用时 %s" % dur
+        results = self._account_results or []
+        some_ok = len(results) > 1 and any(item.get("ok") for item in results)
+        title = "MAA 挂机部分失败" if some_ok else "MAA 挂机异常"
+        body = (err or self._format_account_summary() or "挂机异常")[:160]
+        return title, body
 
     def _elapsed_ticker(self, started):
         while not self.stop_evt.is_set():
@@ -985,13 +1026,15 @@ class Engine:
         accounts = enabled_accounts(self.cfg)
         queue = accounts or [None]
         multi = len(accounts) > 1
+        self._account_results = []
         for idx, acc in enumerate(queue, 1):
             if self.stop_evt.is_set():
                 raise PipelineError("已被手动中止")
-            if idx > 1 and process_running("MAA.exe"):
-                raise PipelineError("上一账号的 MAA 仍在运行，无法切换到下一账号")
+            if idx > 1:
+                self._ensure_maa_stopped()
 
             account_name = (acc or {}).get("account_name", "") if acc else ""
+            display = ((acc or {}).get("name") or account_name or "当前登录") if acc else "当前登录"
             label = account_label(acc, idx, len(queue))
             self._set(account=label, task="—")
             if acc is not None:
@@ -999,22 +1042,64 @@ class Engine:
                 self.log("phase", "══ 账号 %s%s ══" % (label, extra))
 
             more_after = idx < len(queue)
-            self._launch_and_monitor_maa(account_name, force_close=more_after)
+            reason = ""
+            try:
+                self._launch_and_monitor_maa(account_name, force_close=more_after)
+            except PipelineError as exc:
+                if self.stop_evt.is_set():
+                    raise PipelineError("已被手动中止")
+                if not multi:
+                    raise
+                reason = str(exc)
+                self._close_maa_if_running("账号失败，关闭后继续下一号")
 
             if self.stop_evt.is_set():
                 raise PipelineError("已被手动中止")
-            if not self._completed:
-                if multi:
-                    remain = len(queue) - idx
-                    raise PipelineError(
-                        "账号「%s」未完成（未检测到「任务已全部完成」），"
-                        "已中止后续账号（还剩 %d 个未跑）" % (label, remain)
-                    )
-                break
-            if more_after:
-                self.log("ok", "账号「%s」已完成，准备切换下一账号" % label)
 
-        self._end_phase("maa")
+            if self._completed:
+                self._account_results.append({
+                    "name": display, "account_name": account_name, "ok": True, "error": "",
+                })
+                if more_after:
+                    self.log("ok", "账号「%s」已完成，准备切换下一账号" % label)
+                continue
+
+            reason = reason or "未检测到「任务已全部完成」"
+            self._account_results.append({
+                "name": display, "account_name": account_name, "ok": False, "error": reason,
+            })
+            if not multi:
+                break
+            self.log("error", "账号「%s」未完成：%s，跳过并继续下一账号" % (label, reason))
+            self._close_maa_if_running("账号未完成，关闭后继续下一号")
+
+        if multi:
+            failed = [item for item in self._account_results if not item.get("ok")]
+            self._completed = not failed and bool(self._account_results)
+            if failed:
+                self.log("warn", self._format_account_summary())
+        self._end_phase("maa", ok=not (multi and any(not item.get("ok") for item in self._account_results)))
+
+    def _close_maa_if_running(self, reason: str):
+        if self.maa_proc is not None and self.maa_proc.poll() is None:
+            self._close_maa(reason)
+
+    def _ensure_maa_stopped(self, timeout=None, interval=None):
+        """切下一号前确认 MAA 已退出。先按现有流程关本进程，再短轮询；仍在则整轮失败。"""
+        if timeout is None:
+            timeout = getattr(self, "_maa_stop_timeout", 12)
+        if interval is None:
+            interval = getattr(self, "_maa_stop_interval", 1.5)
+        self._close_maa_if_running("准备切换下一账号")
+        deadline = time.time() + max(0.0, float(timeout))
+        step = max(0.05, float(interval))
+        while True:
+            if not process_running("MAA.exe"):
+                return
+            if time.time() >= deadline:
+                break
+            time.sleep(min(step, max(0.0, deadline - time.time())))
+        raise PipelineError("上一账号的 MAA 仍在运行，无法切换到下一账号")
 
     def _wait_tail_thread(self, timeout=4):
         th = self._tail_thread
@@ -1194,7 +1279,11 @@ class Engine:
             else:
                 self.log("info", "按配置保留模拟器运行")
         else:
-            self.log("warn", "未检测到「任务已全部完成」，保留模拟器运行以避免误关")
+            summary = self._format_account_summary()
+            if summary and len(self._account_results) > 1:
+                self.log("warn", summary + "。未全部完成，保留模拟器运行以避免误关")
+            else:
+                self.log("warn", "未检测到「任务已全部完成」，保留模拟器运行以避免误关")
         self._end_phase("wrap")
 
     def _wait_mumu_stopped(self, timeout=25):

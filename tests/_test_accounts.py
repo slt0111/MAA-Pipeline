@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多账号顺序挂机：配置规范化、切号写入、失败即停、单账号兼容。
+"""多账号顺序挂机：配置规范化、切号写入、失败跳过并继续、单账号兼容。
 
 跑法：
     python tests/_test_accounts.py
@@ -115,7 +115,7 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(restored["Current"] == "Default", "还原 Current")
 
 
-print("=== 4. 多账号顺序跑 + 失败即停 ===")
+print("=== 4. 多账号顺序跑 + 失败跳过并继续 ===")
 calls = []
 
 
@@ -126,6 +126,10 @@ def fake_launch(self, account_name="", force_close=False):
         return
     if account_name == "boom":
         raise pipeline.PipelineError("账号启动失败：boom")
+    if account_name == "abort-after":
+        self._completed = True
+        self.stop_evt.set()
+        return
     self._completed = True
 
 
@@ -153,31 +157,53 @@ try:
     ok([c[0] for c in calls] == ["111", "222"], "只跑启用账号且按顺序", calls)
     ok(calls[0][1] is True and calls[1][1] is False, "非末号 force_close，末号尊重原关闭策略", calls)
     ok(engine._completed is True, "全部成功后 _completed 为真")
+    ok(engine._account_failure_message() == "", "全部成功没有失败摘要")
 
     calls.clear()
     engine = make_engine([])
     engine._phase_maa()
     ok(calls == [("", False, "当前登录")], "空列表走单账号隐式一轮（不切号）", calls)
+    ok(engine._account_failure_message() == "", "空列表不把没跑完算成整轮失败")
 
     calls.clear()
     engine = make_engine([{"name": "仅一个", "account_name": "only", "enabled": True}])
     engine._phase_maa()
     ok(len(calls) == 1 and calls[0][0] == "only" and calls[0][1] is False,
-       "单个启用账号不走失败即停的多号逻辑，也不强制关窗", calls)
+       "单个启用账号不强制关窗", calls)
 
     calls.clear()
     engine = make_engine([
         {"name": "先成", "account_name": "ok1", "enabled": True},
         {"name": "失败号", "account_name": "bad", "enabled": True},
-        {"name": "不该跑", "account_name": "ok2", "enabled": True},
+        {"name": "还要跑", "account_name": "ok2", "enabled": True},
     ])
     raised = None
     try:
         engine._phase_maa()
     except pipeline.PipelineError as exc:
         raised = str(exc)
-    ok(raised and "失败号" in raised and "未完成" in raised, "某一号没跑完会失败即停", raised)
-    ok([c[0] for c in calls] == ["ok1", "bad"], "失败后不再跑后续账号", calls)
+    ok(raised is None, "某一号没跑完不中断整轮", raised)
+    ok([c[0] for c in calls] == ["ok1", "bad", "ok2"], "失败后继续跑后续账号", calls)
+    ok(engine._completed is False, "有失败时 _completed 为假（不关模拟器）")
+    ok(engine._account_failure_message() == "完成 2/3 个账号，失败：失败号",
+       "失败摘要列出失败号", engine._account_failure_message())
+    ok(engine._result_label(False) == "部分失败", "有成功也有失败 → 部分失败")
+    title, body = engine._notify_copy(False, 90, engine._account_failure_message())
+    ok(title == "MAA 挂机部分失败" and "失败号" in body, "通知区分部分失败", (title, body))
+
+    calls.clear()
+    engine = make_engine([
+        {"name": "炸", "account_name": "boom", "enabled": True},
+        {"name": "还能跑", "account_name": "ok1", "enabled": True},
+    ])
+    raised = None
+    try:
+        engine._phase_maa()
+    except pipeline.PipelineError as exc:
+        raised = str(exc)
+    ok(raised is None, "单号启动失败在多账号下跳过", raised)
+    ok([c[0] for c in calls] == ["boom", "ok1"], "启动失败后仍跑下一号", calls)
+    ok(any(not r["ok"] and r["name"] == "炸" for r in engine._account_results), "炸号记入失败列表")
 
     calls.clear()
     engine = make_engine([{"name": "炸", "account_name": "boom", "enabled": True}])
@@ -186,10 +212,84 @@ try:
         engine._phase_maa()
     except pipeline.PipelineError as exc:
         raised = str(exc)
-    ok(raised == "账号启动失败：boom", "启动失败原样抛出", raised)
+    ok(raised == "账号启动失败：boom", "单账号启动失败仍原样抛出", raised)
+
+    calls.clear()
+    engine = make_engine([{"name": "仅一个", "account_name": "bad", "enabled": True}])
+    raised = None
+    try:
+        engine._phase_maa()
+    except pipeline.PipelineError as exc:
+        raised = str(exc)
+    ok(raised is None, "单账号没跑完不抛错（历史行为）", raised)
+    ok(engine._account_failure_message() == "", "单账号没跑完不算整轮失败摘要")
+
+    calls.clear()
+    engine = make_engine([
+        {"name": "先成再中止", "account_name": "abort-after", "enabled": True},
+        {"name": "不该跑", "account_name": "ok2", "enabled": True},
+    ])
+    raised = None
+    try:
+        engine._phase_maa()
+    except pipeline.PipelineError as exc:
+        raised = str(exc)
+    ok(raised == "已被手动中止", "用户中止仍停整轮", raised)
+    ok([c[0] for c in calls] == ["abort-after"], "中止后不再跑下一号", calls)
 finally:
     pipeline.process_running = orig_running
     pipeline.mumu_info = orig_info
+
+
+print("=== 4b. 切号前 MAA 残留：短重试后整轮失败 ===")
+engine = pipeline.Engine(pipeline.Config.from_data({}), pipeline.Bus())
+engine.stop_evt.clear()
+engine.maa_proc = None
+hits = {"n": 0}
+
+
+def flaky(_name):
+    hits["n"] += 1
+    return hits["n"] < 3
+
+
+pipeline.process_running = flaky
+try:
+    engine._ensure_maa_stopped(timeout=2, interval=0.01)
+    ok(hits["n"] >= 3, "残留进程会短重试直到退出", hits)
+    pipeline.process_running = lambda _n: True
+    raised = None
+    try:
+        engine._ensure_maa_stopped(timeout=0.05, interval=0.01)
+    except pipeline.PipelineError as exc:
+        raised = str(exc)
+    ok(raised and "仍在运行" in raised, "重试后仍在则整轮失败", raised)
+
+    sticky = {"on": False}
+    leftover_calls = []
+
+    def leftover_launch(self, account_name="", force_close=False):
+        leftover_calls.append(account_name)
+        self._completed = True
+        sticky["on"] = True
+
+    pipeline.process_running = lambda _n: sticky["on"]
+    engine = make_engine([
+        {"name": "A", "account_name": "111", "enabled": True},
+        {"name": "B", "account_name": "222", "enabled": True},
+    ])
+    engine._launch_and_monitor_maa = leftover_launch.__get__(engine)  # noqa: B009
+    engine._maa_stop_timeout = 0.05
+    engine._maa_stop_interval = 0.01
+    raised = None
+    try:
+        engine._phase_maa()
+    except pipeline.PipelineError as exc:
+        raised = str(exc)
+    ok(raised and "仍在运行" in raised, "切下一号时关不掉 MAA 则整轮失败", raised)
+    ok(leftover_calls == ["111"], "关不掉时不会拉起下一号", leftover_calls)
+finally:
+    pipeline.process_running = orig_running
 
 
 print("=== 5. 快照带上 accounts，监控 force_close 仍兼容旧测试调用 ===")

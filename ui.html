@@ -265,9 +265,9 @@ function renderState(s){
   } else if(s.last_result === "成功"){
     pill.className = "pill ok";
     pill.innerHTML = '<span class="dot d-ok"></span>上次成功';
-  } else if(s.last_result === "失败"){
+  } else if(s.last_result === "失败" || s.last_result === "部分失败"){
     pill.className = "pill bad";
-    pill.innerHTML = '<span class="dot d-bad"></span>上次失败';
+    pill.innerHTML = '<span class="dot d-bad"></span>' + (s.last_result === "部分失败" ? "部分失败" : "上次失败");
   } else {
     pill.className = "pill";
     pill.innerHTML = '<span class="dot d-idle"></span>空闲';
