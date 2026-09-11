@@ -106,7 +106,14 @@ ok(mac.maa_connect_config == "CompatMac", "Mac 连接配置 CompatMac")
 ok(win.maa_argv(r"D:\MAA\MAA.exe", "挂机流水线") ==
    [r"D:\MAA\MAA.exe", "--config", "挂机流水线"], "Windows --config")
 ok(mac.maa_argv("/opt/homebrew/bin/maa", "挂机流水线") ==
-   ["/opt/homebrew/bin/maa", "-p", "挂机流水线", "run"], "maa-cli 用 -p / run")
+   ["/opt/homebrew/bin/maa", "-p", "pipeline", "run", "pipeline_farm"],
+   "maa-cli 用 -p pipeline run pipeline_farm")
+ok(mac.maa_exits_when_done("/opt/homebrew/bin/maa") is True, "maa-cli 跑完即退出")
+ok(win.maa_exits_when_done(r"D:\MAA\MAA.exe") is False, "MAA.exe 不因任务完成而退出")
+ok(win.create_tray({}) is None, "Windows 不走 plat 托盘，仍用 Win32 Tray")
+ok(LinuxPlatform().create_tray({}) is None, "Linux 无菜单栏托盘")
+tray = mac.create_tray({"open": lambda: None})
+ok(tray is not None and hasattr(tray, "start"), "macOS create_tray 返回菜单栏托盘")
 ok(mac.is_maa_cli("/usr/local/bin/maa") is True, "识别 maa-cli")
 ok(mac.is_maa_cli("/opt/homebrew/bin/maa-cli") is True, "识别 maa-cli 全名")
 ok(mac.is_maa_cli("/Applications/MAA.app") is False, ".app 不是 cli")
@@ -223,6 +230,7 @@ try:
     snap = pipeline.Engine(pipeline.Config.from_data({}), pipeline.Bus()).snapshot()["config_summary"]
     ok(snap.get("platform") == "linux", "snapshot 带 platform", snap.get("platform"))
     ok("mumu_cli" in snap and "mumu_adb" in snap, "snapshot 带 cli/adb 路径字段")
+    ok(snap.get("maa_backend") in ("gui", "cli"), "snapshot 带 maa_backend")
 finally:
     plat.set_current(orig)
 

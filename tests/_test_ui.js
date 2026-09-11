@@ -17,6 +17,7 @@ const SAMPLE = {
     mumu_cli: "C:\\Program Files\\Netease\\MuMu\\nx_main\\mumu-cli.exe",
     mumu_adb: "C:\\Program Files\\Netease\\MuMu\\nx_main\\adb.exe",
     maa_exe: "C:\\MAA\\MAA.exe", maa_profile: "挂机流水线",
+    maa_backend: "gui", maa_cli_config_dir: "",
     maa_close_after_complete: true, maa_close_delay: 10,
     accounts: [
       {name: "官服主号", account_name: "4567", enabled: true},
@@ -77,6 +78,7 @@ setTimeout(() => {
   ok(doc.getElementById("c-email-smtp_host").value === "smtp.qq.com", "邮件字段回填正确");
   ok(doc.getElementById("c-qmsg-type").value === "group", "Qmsg 发送方式回填正确");
   ok(doc.getElementById("c-webhook-format").value === "通用 JSON", "Webhook 格式回填正确");
+  ok(!!doc.getElementById("c-cli-dir"), "渲染 maa-cli 配置目录字段");
 
   console.log("=== 2. 增删时间点 ===");
   doc.getElementById("btn-add-time").click();
@@ -137,6 +139,7 @@ setTimeout(() => {
   round.close_manager = out.mumu.close_manager;
   round.maa_exe = out.maa.exe;
   round.maa_profile = out.maa.profile;
+  round.maa_cli_config_dir = out.maa.cli_config_dir;
   round.maa_close_after_complete = out.maa.close_after_complete;
   round.maa_close_delay = out.maa.close_delay;
   round.accounts = out.maa.accounts;

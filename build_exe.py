@@ -57,6 +57,8 @@ def main():
         "--hidden-import", "plat.linux",
         "--hidden-import", "plat.base",
         "--hidden-import", "plat.util",
+        "--hidden-import", "plat.maa_cli",
+        "--hidden-import", "plat.tray_macos",
         os.path.join(APP_DIR, "pipeline.py"),
     ]
     rc = run(args, cwd=APP_DIR)

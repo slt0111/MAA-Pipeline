@@ -337,10 +337,23 @@ class MacOSPlatform(Platform):
         return rc == 0
 
     def tray_supported(self) -> bool:
-        return False
+        from plat.tray_macos import tray_backend_available
+        return tray_backend_available() is not None
+
+    def create_tray(self, hooks: dict):
+        from plat.tray_macos import MacStatusTray
+        return MacStatusTray(hooks)
 
     def selftest_tray(self) -> tuple:
+        from plat.tray_macos import tray_backend_available
+        kind = tray_backend_available()
+        if kind:
+            return True, [
+                "  [OK] macOS 菜单栏托盘可用（后端 %s）" % kind,
+                "  [i] 关窗口 = 隐藏到菜单栏，挂机与定时继续跑；二次启动会唤起已有实例",
+            ], []
         return True, [
-            "  [i] macOS 源码运行暂不提供菜单栏图标（与 Windows 托盘不对等）",
-            "  [i] 桌面通知走通知中心；关窗口后进程仍可在后台跑，再次启动会唤起已有实例",
+            "  [i] 未安装 AppKit / rumps / pystray：关窗后无法驻留菜单栏",
+            "  [i] 源码运行请：python3 -m pip install pyobjc-framework-Cocoa",
+            "  [i] 打进 .app 后一般自带 Cocoa；二次启动仍会唤起已有实例",
         ], []

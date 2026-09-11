@@ -396,6 +396,8 @@ function buildCfg(cs, schedule, notify){
   html += '<div class="sect">MAA</div>' +
     field("MAA 主程序路径","c-maa","text",cs.maa_exe) +
     field("挂机配置名","c-profile","text",cs.maa_profile) +
+    field("maa-cli 配置目录（可选，留空自动探测）","c-cli-dir","text",
+      cs.maa_cli_config_dir || (cs.maa && cs.maa.cli_config_dir) || "") +
     '<div class="field"><label>完成后自动关闭 MAA</label>' +
       '<div class="row" style="padding:6px 0">' +
         '<input type="checkbox" id="c-maaclose"' + (cs.maa_close_after_complete ? " checked" : "") +
@@ -499,6 +501,7 @@ function collectCfg(){
     maa:{
       exe: $("c-maa").value.trim(),
       profile: $("c-profile").value.trim(),
+      cli_config_dir: $("c-cli-dir") ? $("c-cli-dir").value.trim() : "",
       close_after_complete: $("c-maaclose").checked,
       close_delay: Number($("c-maadelay").value || 10),
       accounts: collectAccounts()

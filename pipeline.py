@@ -117,6 +117,8 @@ DEFAULT_CONFIG = {
         "close_delay": 10,
         # 同一模拟器顺序切号：空列表 = 单账号（与历史行为一致）
         "accounts": [],
+        # maa-cli 专用配置目录；留空则自动探测（MAA_CONFIG_DIR / maa dir config）
+        "cli_config_dir": "",
     },
     "server": {"port": 17800, "open_browser": True, "window_mode": "auto"},
     # times 为空时回退到老的单个 time 字段，保证老配置不丢设置
@@ -584,12 +586,14 @@ def inject_maa_profile(cfg: Config, log, account_name=""):
         raise PipelineError("找不到 MAA 主程序：%s" % maa_exe)
 
     if not adapter.uses_gui_inject(maa_exe):
-        log(
-            "warn",
-            "当前 MAA 路径指向 maa-cli：不会写入 gui.new.json。"
-            "多账号切号依赖 GUI 配置注入，此路径下仅顺序重跑同一套 CLI 任务",
+        from plat import maa_cli
+        return maa_cli.inject_cli(
+            cfg,
+            log,
+            account_name,
+            connect_config=adapter.maa_connect_config,
+            adb_address=resolve_adb_address(cfg),
         )
-        return None
 
     cfg_path = adapter.maa_config_path(maa_dir)
     if not os.path.exists(cfg_path):
@@ -732,6 +736,8 @@ class Engine:
             "close_manager": self.cfg.get("mumu", "close_manager", default=True),
             "maa_exe": self.cfg.maa_exe,
             "maa_profile": self.cfg.get("maa", "profile", default=""),
+            "maa_backend": "cli" if host().is_maa_cli(self.cfg.maa_exe) else "gui",
+            "maa_cli_config_dir": self.cfg.get("maa", "cli_config_dir", default=""),
             "maa_close_after_complete": self.cfg.get("maa", "close_after_complete", default=True),
             "maa_close_delay": self.cfg.get("maa", "close_delay", default=10),
             "accounts": normalized_accounts(self.cfg),
@@ -1144,13 +1150,24 @@ class Engine:
         argv = adapter.maa_argv(self.cfg.maa_exe, profile_name)
         cwd = adapter.maa_cwd(self.cfg.maa_exe, self.cfg.maa_dir)
         self.log("info", "拉起 MAA：%s" % " ".join(argv[1:] if argv else []))
+        popen_kw = {"cwd": cwd or None}
+        if adapter.maa_exits_when_done(self.cfg.maa_exe):
+            popen_kw.update(
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
         try:
-            self.maa_proc = subprocess.Popen(argv, cwd=cwd or None)
+            self.maa_proc = subprocess.Popen(argv, **popen_kw)
         except Exception as exc:  # noqa: BLE001
             raise PipelineError("启动 MAA 失败：%s" % exc)
         self._set(maa="已拉起")
 
-        if self.cfg.get("maa", "mirror_logs", default=True):
+        if self.maa_proc.stdout is not None:
+            self._tail_thread = threading.Thread(target=self._tail_maa_stdout, daemon=True)
+            self._tail_thread.start()
+        elif self.cfg.get("maa", "mirror_logs", default=True):
             self._tail_thread = threading.Thread(
                 target=self._tail_maa_log, args=(log_path,), daemon=True
             )
@@ -1173,7 +1190,12 @@ class Engine:
                     started = True
                     break
             if self.maa_proc.poll() is not None:
-                raise PipelineError("MAA 进程已退出（退出码 %s）" % self.maa_proc.returncode)
+                rc = self.maa_proc.returncode
+                if adapter.maa_exits_when_done(self.cfg.maa_exe) and rc == 0:
+                    self._completed = True
+                    started = True
+                    break
+                raise PipelineError("MAA 进程已退出（退出码 %s）" % rc)
             time.sleep(1)
 
         if started:
@@ -1205,6 +1227,14 @@ class Engine:
         done_at = None
         while not self.stop_evt.is_set():
             if self.maa_proc is None or self.maa_proc.poll() is not None:
+                if (
+                    self.maa_proc is not None
+                    and self.maa_proc.returncode == 0
+                    and host().maa_exits_when_done(self.cfg.maa_exe)
+                    and not self._completed
+                ):
+                    self._completed = True
+                    self.log("ok", "maa-cli 已退出 (0)，视为任务完成")
                 break
             # 关键：MAA 报「任务已全部完成」后 GUI 进程并不会自己退出。
             # 必须在这里主动收尾，否则会一直空转等进程退出（旧版本即如此，
@@ -1332,6 +1362,23 @@ class Engine:
         recent[msg] = now
         self.log(level, msg)
 
+    def _tail_maa_stdout(self):
+        """跟随 maa-cli 的 stdout（它不写 gui.log）。"""
+        proc = self.maa_proc
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            for raw in proc.stdout:
+                if self.stop_evt.is_set():
+                    break
+                if isinstance(raw, bytes):
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                else:
+                    line = raw.rstrip("\r\n")
+                self._handle_maa_line(line)
+        except Exception:
+            pass
+
     def _tail_maa_log(self, path):
         """跟随 MAA 日志。只要 MAA 还活着就持续跟随，不会因为战斗期间日志安静而提前退出。"""
         pos = self._maasession_pos
@@ -1369,6 +1416,14 @@ class Engine:
             return
         match = self.RE_LOG_LINE.match(line.strip())
         if not match:
+            # maa-cli 等非 GUI 日志：仍识别完成与切号
+            if self.RE_ALL_DONE.search(line):
+                self._completed = True
+                self._log_maa("ok", "MAA：任务已全部完成")
+                self._set(task="全部完成")
+            elif "AccountSwitch" in line or "切换账号" in line:
+                self._started_evidence = True
+                self._log_maa("ok", "MAA：%s" % line.strip()[:200], window=8.0)
             return
         level, _cls, body = match.groups()
         body = body.strip()
@@ -2194,9 +2249,9 @@ def _load_icon_handle(cx: int):
 class NativeWindow:
     """把网页界面装进原生窗口，用起来更接近 MAA 这类桌面程序。
 
-    - 关掉窗口不退出：最小化到托盘，挂机与定时继续在后台跑
-    - 托盘双击 / 菜单「打开界面」：唤起同一个窗口，不会越开越多
-    - 已有实例在跑时再次双击：唤起那个实例的窗口
+    - 关掉窗口不退出：最小化到托盘 / 菜单栏，挂机与定时继续在后台跑
+    - 托盘 / 菜单栏「显示主界面」：唤起同一个窗口，不会越开越多
+    - 已有实例在跑时再次启动：唤起那个实例的窗口
     """
 
     def __init__(self, url: str, cfg: Config, bus: Bus):
@@ -2244,7 +2299,10 @@ class NativeWindow:
         except Exception as exc:  # noqa: BLE001
             self.bus.log("warn", "窗口隐藏失败，改为直接退出：%s" % exc)
             return True
-        self.bus.log("info", "窗口已最小化到托盘（双击托盘图标可重新打开）")
+        if host().name == "macos":
+            self.bus.log("info", "窗口已最小化到菜单栏，挂机与定时仍在后台运行")
+        else:
+            self.bus.log("info", "窗口已最小化到托盘（双击托盘图标可重新打开）")
         tray = TRAY_INSTANCE
         if tray is not None and getattr(tray, "active", False):
             tray.notify(WINDOW_TITLE, "已最小化到托盘，挂机与定时仍在后台运行")
@@ -2526,16 +2584,31 @@ def selftest() -> int:
         print("  [i] 未配置多账号（按当前登录号跑一轮）")
 
     print("\n[2] MAA 配置文件")
-    cfg_path = host().maa_config_path(cfg.maa_dir)
-    if os.path.exists(cfg_path):
-        with open(cfg_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        confs = list((data.get("Configurations") or {}).keys())
-        print("  [OK] 找到 gui.new.json，现有配置：%s" % "、".join(confs))
-        print("  [i] 当前激活配置：%s" % data.get("Current"))
+    if host().uses_gui_inject(cfg.maa_exe):
+        cfg_path = host().maa_config_path(cfg.maa_dir)
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            confs = list((data.get("Configurations") or {}).keys())
+            print("  [OK] 找到 gui.new.json，现有配置：%s" % "、".join(confs))
+            print("  [i] 当前激活配置：%s" % data.get("Current"))
+            print("  [i] 后端 GUI：多账号写入开始唤醒 account_name")
+        else:
+            print("  [!!] 找不到 %s" % cfg_path)
+            problems.append("MAA 配置文件缺失")
     else:
-        print("  [!!] 找不到 %s" % cfg_path)
-        problems.append("MAA 配置文件缺失")
+        from plat import maa_cli
+        cli_dir = maa_cli.resolve_cli_config_dir(
+            cfg.maa_exe, cfg.get("maa", "cli_config_dir", default="")
+        )
+        print("  [i] 后端 maa-cli：配置目录 %s" % cli_dir)
+        print("  [i] 启动：maa -p pipeline run pipeline_farm")
+        print("  [i] 多账号写入 tasks/pipeline_farm.json 的 StartUp.account_name")
+        farm = os.path.join(cli_dir, "tasks", maa_cli.CLI_TASK + ".json")
+        if os.path.exists(farm):
+            print("  [OK] 已有 %s" % farm)
+        else:
+            print("  [i] 尚未写入 pipeline_farm.json（首次挂机时按账号注入）")
 
     print("\n[3] 模拟器状态")
     try:
@@ -2703,7 +2776,30 @@ def main():
         )
 
     if not no_tray and cfg.get("tray", "enabled", default=True):
-        if host().tray_supported():
+        hooks = {
+            "open": lambda: open_interface(url),
+            "run": lambda: engine.start("full"),
+            "abort": engine.abort,
+            "quit": lambda: (
+                bus.log("info", "从托盘退出"),
+                threading.Thread(target=_shutdown, daemon=True).start(),
+            ),
+            "notify_fallback": lambda title, body: host().desktop_notify(title, body),
+        }
+        plat_tray = None
+        try:
+            plat_tray = host().create_tray(hooks)
+        except Exception as exc:  # noqa: BLE001
+            bus.log("warn", "平台托盘创建失败：%s" % exc)
+        if plat_tray is not None:
+            TRAY_INSTANCE = plat_tray
+            try:
+                TRAY_INSTANCE.start()
+                bus.log("info", "菜单栏托盘已就绪（显示主界面 / 立即挂机 / 中止 / 退出）")
+            except Exception as exc:  # noqa: BLE001
+                bus.log("warn", "菜单栏托盘初始化失败（不影响主功能）：%s" % exc)
+                TRAY_INSTANCE = _NotifyOnlyTray()
+        elif host().tray_supported():
             TRAY_INSTANCE = Tray(cfg, engine, bus, url)
             TRAY_INSTANCE.start()
         else:

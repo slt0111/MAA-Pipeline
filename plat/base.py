@@ -244,9 +244,8 @@ class Platform:
     def maa_argv(self, exe: str, profile: str) -> list:
         binary = self.resolve_maa_binary(exe)
         if self.is_maa_cli(exe) or self.is_maa_cli(binary):
-            if profile:
-                return [binary, "-p", profile, "run"]
-            return [binary, "run"]
+            from plat.maa_cli import CLI_PROFILE, CLI_TASK, cli_argv
+            return cli_argv(binary, profile=CLI_PROFILE, task=CLI_TASK)
         if profile:
             return [binary, "--config", profile]
         return [binary]
@@ -256,6 +255,14 @@ class Platform:
 
     def uses_gui_inject(self, exe: str) -> bool:
         return not self.is_maa_cli(exe)
+
+    def maa_exits_when_done(self, exe: str) -> bool:
+        """maa-cli 跑完任务链会退出；MAA.exe / MAA.app 则一直开着。"""
+        return self.is_maa_cli(exe)
+
+    def create_tray(self, hooks: dict):
+        """非 Windows 的菜单栏托盘。None = 调用方继续用 Win32 Tray。"""
+        return None
 
     # ---------- 关闭 / 桌面 ----------
 
