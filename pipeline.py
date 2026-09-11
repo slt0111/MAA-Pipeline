@@ -292,7 +292,15 @@ class Config:
 
     @property
     def maa_exe(self) -> str:
-        return self.get("maa", "exe", default="")
+        raw = (self.get("maa", "exe", default="") or "").strip().strip('"').strip()
+        # 常见误填：只填了 MAA 的安装目录（如 ...\MAA-Pipeline\MAA）。
+        # 此时 dirname() 会把 MAA 目录整体上移一级，最终报「找不到配置文件」，
+        # 所以这里直接补成目录下的 MAA.exe，让「填文件夹」也能正常工作。
+        if raw and os.path.isdir(raw):
+            cand = os.path.join(raw, "MAA.exe")
+            if os.path.isfile(cand):
+                return cand
+        return raw
 
     @property
     def maa_dir(self) -> str:
@@ -597,7 +605,11 @@ def inject_maa_profile(cfg: Config, log, account_name=""):
 
     cfg_path = adapter.maa_config_path(maa_dir)
     if not os.path.exists(cfg_path):
-        raise PipelineError("找不到 MAA 配置文件：%s" % cfg_path)
+        raise PipelineError(
+            "找不到 MAA 配置文件：%s\n"
+            "（配置文件位于 MAA 安装目录下的 config\\gui.new.json，"
+            "请确认「MAA 主程序」填的是 MAA.exe 文件本身，而不是它所在的文件夹）" % cfg_path
+        )
 
     backup = cfg_path + ".pipeline.bak"
     if not os.path.exists(backup):
