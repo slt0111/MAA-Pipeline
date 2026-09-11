@@ -289,7 +289,8 @@ function renderState(s){
   if(s.running && s.account) accTxt = " · 正在挂「" + s.account + "」";
   else if(accs.length > 1) accTxt = " · " + accs.length + " 个账号顺序挂机";
   else if(accs.length === 1) accTxt = " · 账号 " + accs[0].name;
-  $("subline").textContent = "MuMu 模拟器 · 设备索引 " + cs.vm_index + " · " + cs.adb_address + accTxt + " · " + (s.server || "");
+  const plat = cs.platform_label || "";
+  $("subline").textContent = (plat ? plat + " · " : "") + "MuMu 模拟器 · 设备索引 " + cs.vm_index + " · " + (cs.adb_address || "ADB 自动推导") + accTxt + " · " + (s.server || "");
   $("nextsched").textContent = s.next_schedule ? ("定时：" + s.next_schedule) : "定时：未启用";
 }
 
@@ -378,6 +379,8 @@ function buildCfg(cs, schedule, notify){
   let html = "";
 
   html += '<div class="sect">模拟器与连接</div>' +
+    field("模拟器 CLI（Windows: mumu-cli.exe / Mac: mumutool）","c-cli","text",cs.mumu_cli) +
+    field("adb 路径","c-adbin","text",cs.mumu_adb) +
     field("设备索引","c-vm","number",cs.vm_index) +
     field("ADB 地址（留空自动推导）","c-adbaddr","text",cs.adb_address) +
     field("就绪超时（秒）","c-timeout","number",cs.ready_timeout) +
@@ -485,6 +488,8 @@ function collectCfg(){
 
   return {
     mumu:{
+      cli: $("c-cli") ? $("c-cli").value.trim() : "",
+      adb: $("c-adbin") ? $("c-adbin").value.trim() : "",
       vm_index: Number($("c-vm").value || 0),
       adb_address: $("c-adbaddr").value.trim(),
       ready_timeout: Number($("c-timeout").value || 180),

@@ -1,11 +1,11 @@
 # MAA 挂机助手 · MAA Pipeline
 
-一键完成「**启动 MuMu 模拟器 → 等待安卓就绪 → 拉起 MAA 自动挂机 → 收工关模拟器**」的 Windows 桌面小工具。
+一键完成「**启动 MuMu 模拟器 → 等待安卓就绪 → 拉起 MAA 自动挂机 → 收工关模拟器**」的桌面小工具。
 
-带图形界面、实时运行日志、多时间点定时，以及微信 / QQ / 邮件 / Webhook 多通道完成通知。
+同一仓库同时支持 **Windows** 与 **macOS**（Mac 目前以源码运行为主）。带图形界面、实时运行日志、多账号顺序挂机、多时间点定时，以及微信 / QQ / 邮件 / Webhook 多通道完成通知。
 
 > 本工具是**调度器**，只负责按顺序启动和监控，不修改 MAA 与 MuMu 本体。
-> 仓库**不包含**任何第三方软件安装包，MAA 与 MuMu 需自行安装。
+> 仓库**不包含**任何第三方软件安装包，MAA 与 MuMu 需自行安装。平台差异集中在 `plat/`，流水线逻辑共用。
 
 ---
 
@@ -15,14 +15,14 @@
 |---|---|
 | 🎯 **六阶段流水线** | 环境自检 → 启动模拟器 → 等待安卓就绪 → 确认 ADB 通路 → 拉起 MAA → 收尾归档，任一阶段失败即中断 |
 | 👥 **多账号顺序挂机** | 同一 MuMu 实例上按列表跑完账号 A 再切账号 B（MAA「开始唤醒」`account_name`），不是多开模拟器并行 |
-| 🖥 **原生桌面窗口** | pywebview 套壳，形态与 MAA 类似；关闭窗口即缩到托盘，挂机与定时继续在后台跑 |
+| 🖥 **原生桌面窗口** | pywebview 套壳，形态与 MAA 类似；Windows 关闭窗口即缩到托盘；Mac 关窗后进程仍可在后台，再次启动会唤起已有实例 |
 | 📋 **实时运行记录** | 界面实时滚动日志，同时按天落盘到 `logs/YYYY-MM-DD.md`，可一键下载 |
 | ⏰ **多时间点定时** | 每天可设多个时间点自动挂机（如 `08:00`、`12:30`、`20:00`），可指定星期几 |
 | 🔔 **多通道通知** | 桌面气泡 / 邮件 / Server酱 / PushPlus / WxPusher / Qmsg酱 / 自定义 Webhook，支持「测试」按钮即时验证 |
 | 🧩 **三种运行模式** | `full` 全流程 / `emu` 只开模拟器 / `maa` 只跑 MAA |
 | 🚪 **收工自动关模拟器** | 仅当确认 MAA 报「任务已全部完成」才关闭，中途手动退出 MAA 不会误杀 |
 | 🔌 **不污染 MAA 配置** | 每次运行注入独立的「挂机流水线」配置，结束后还原，你原来的 `Default` 配置一个字节都不会动 |
-| 📦 **通用安装包** | 自带安装向导 + 卸载器，支持换机路径自动探测，无需管理员权限 |
+| 📦 **通用安装包** | Windows 自带安装向导 + 卸载器，支持换机路径自动探测，无需管理员权限。Mac 安装包 / dmg 为后续工作 |
 
 ---
 
@@ -36,13 +36,24 @@
 
 ## 快速开始
 
-### 前置条件
+### 前置条件（Windows）
 
 | 依赖 | 说明 |
 |---|---|
 | **MuMu 模拟器 12** | 官网 <https://mumu.163.com/> ，默认安装路径即可 |
 | **MAA** | 从 [MAA 官方 Release](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases) 下载 Windows 版并解压，**至少手动运行一次**完成初始化 |
 | **Windows 10/11** | 建议装有 WebView2 运行时（Win11 自带；缺失时程序会自动改用浏览器界面） |
+
+### 前置条件（macOS）
+
+| 依赖 | 说明 |
+|---|---|
+| **MuMu 模拟器（macOS）** | 官网 <https://mumu.163.com/mac/> ，**1.5.4+**（需带开发者命令行 `mumutool`）。菜单：开发者 → 打开命令行工具 / 打开 ADB。说明：<https://www.mumuplayer.com/help/mac/developer-support-function.html> |
+| **MAA.app**（推荐） | [官方 Release](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases) 的 macOS 包，或 `brew install --cask maa`。**至少手动打开一次**以生成 `gui.new.json`。本工具按与 Windows 相同的方式注入「挂机流水线」并用 `--config` 拉起 |
+| **maa-cli**（备选） | `brew install MaaAssistantArknights/tap/maa-cli`。能跑通 `full` / 自检，但**不会**写入 `gui.new.json`，多账号切号依赖 GUI 注入，此路径下仅顺序重跑 |
+| **Python 3.10+** | `python3 -m pip install pywebview`（原生窗口需要；也可 `--browser`） |
+
+Mac **没有** Windows 安装包 / dmg；请用下面的源码方式。ADB 端口**不是** `16384 + 32 × 索引`，请留空让程序读 `mumutool info`，或在设置里填菜单「打开 ADB」显示的地址（例如 `127.0.0.1:26624`）。
 
 ### 方式一：使用安装包（推荐）
 
@@ -60,17 +71,20 @@
 git clone <本仓库地址>
 cd MAA-Pipeline
 
-# 依赖（仅打包时需要，纯运行只需 Python 标准库）
-python -m pip install pywebview pyinstaller pillow
+# 依赖（原生窗口需要 pywebview；打包才需要后两个）
+python3 -m pip install pywebview
+# Windows 打包另需：pyinstaller pillow
 
 # 直接运行（会自动打开原生窗口）
-python pipeline.py
+python3 pipeline.py
+# macOS / Linux 也可用：
+#   chmod +x start-pipeline.sh && ./start-pipeline.sh
 
 # 环境自检：只检查路径 / MAA 配置 / 模拟器状态，不启动界面
-python pipeline.py --selftest
+python3 pipeline.py --selftest
 ```
 
-首次运行会自动寻找 MuMu 与 MAA 的安装位置并写入配置；找不到时在界面右侧「设置」里手动填路径即可。
+首次运行会按**当前操作系统**自动寻找 MuMu 与 MAA 的安装位置并写入配置；找不到时在界面右侧「设置」里手动填路径即可。已有的 `pipeline_config.json` 不会被 Mac 默认路径覆盖。
 
 ### 方式三：自己打包成 exe
 
@@ -93,10 +107,10 @@ python build_installer.py --with-maa    # 完整版安装包（内置 MAA）
 | 阶段 | 做什么 | 失败即中断 |
 |---|---|---|
 | `env` | 校验 MuMu CLI、adb、MAA 是否就位；确认 MAA 未在运行 | ✅ |
-| `launch` | `mumu-cli control launch` 启动指定实例 | ✅ |
-| `ready` | 轮询 `is_android_started`，最长等待 180 秒，再用 `adb` 校验 `sys.boot_completed=1` | ✅ |
-| `adb` | 确认 `127.0.0.1:16384`（= `16384 + 32 × 实例号`）通路正常 | ✅ |
-| `maa` | 以 `MAA.exe --config 挂机流水线` 启动，实时镜像日志到界面；一旦出现「任务已全部完成」，等待「关闭延迟」秒后关掉 MAA。多账号时按顺序切号；单号失败跳过并继续，点中止或切不了号才中断整轮 | 单号跳过 |
+| `launch` | Windows：`mumu-cli control launch`；Mac：`mumutool open <索引>` | ✅ |
+| `ready` | 轮询规范化后的 `is_android_started`，最长等待 180 秒 | ✅ |
+| `adb` | Windows：`127.0.0.1:16384`（= `16384 + 32 × 实例号`）；Mac：读 `mumutool info` 的端口或你填的地址 | ✅ |
+| `maa` | 以 `MAA --config 挂机流水线`（Mac 为 MAA.app 内二进制）启动，实时镜像日志；「任务已全部完成」后按延迟关 MAA。多账号顺序切号，单号失败跳过 | 单号跳过 |
 | `wrap` | 归档日志；确认 MAA 报「任务已全部完成」后按设置关闭模拟器实例（可选连 MuMu 管理器一起关） | — |
 
 ### 为什么不用改你的 MAA 配置
@@ -123,15 +137,15 @@ python build_installer.py --with-maa    # 完整版安装包（内置 MAA）
 ```jsonc
 {
   "mumu": {
-    "cli": "...\\nx_main\\mumu-cli.exe",   // 模拟器命令行工具
-    "adb": "...\\nx_main\\adb.exe",
+    "cli": "...\\nx_main\\mumu-cli.exe",   // Windows: mumu-cli.exe；Mac: mumutool
+    "adb": "...\\nx_main\\adb.exe",        // Mac 常见 /opt/homebrew/bin/adb 或模拟器自带
     "vm_index": 0,                          // 实例序号，0 开始
     "ready_timeout": 180,                   // 等待安卓就绪最长时间（秒）
     "shutdown_after_complete": true,        // 挂机完成后关模拟器实例
     "close_manager": true                   // 连 MuMu 管理器窗口一起关掉
   },
   "maa": {
-    "exe": "...\\MAA\\MAA.exe",
+    "exe": "...\\MAA\\MAA.exe",          // Mac: /Applications/MAA.app 或 maa-cli
     "profile": "挂机流水线",                 // 运行时注入的配置名
     "mirror_logs": true,                    // 把 MAA 日志镜像到界面
     "close_after_complete": true,           // 报「任务已全部完成」后自动关掉 MAA
@@ -170,7 +184,12 @@ python build_installer.py --with-maa    # 完整版安装包（内置 MAA）
 ```
 MAA-Pipeline/
 ├── pipeline.py            # 主程序：HTTP 服务 + 流水线引擎 + 定时器 + 托盘 + 通知
+├── plat/                  # 平台适配：路径 / 模拟器 / ADB / MAA 进程 / 窗口
+│   ├── windows.py
+│   ├── macos.py
+│   └── linux.py           # CI 用，不驱动真实模拟器
 ├── ui.html                # 界面（SSE 实时推日志与状态）
+├── start-pipeline.sh      # macOS / Linux 源码启动
 ├── installer.py           # 通用安装器（安装向导 + 卸载逻辑）
 ├── installer_ui.html      # 安装向导界面
 ├── build_exe.py           # 一键打包主程序 exe
@@ -191,8 +210,10 @@ MAA-Pipeline/
 ## 常见问题
 
 **Q：提示找不到模拟器 / MAA？**
-程序会按常见安装位置自动探测（各盘符的 `Program Files\Netease`、`MAA` 等）。探测不到就在界面「设置」里手动填绝对路径。
-MuMu 的具体路径一般是 `<安装盘>\Program Files\Netease\MuMu\nx_main\`。
+程序会按当前操作系统的常见安装位置自动探测。Windows：各盘符的 `Program Files\Netease`、`MAA` 等。macOS：`/Applications/MuMuPlayer.app` 里的 `mumutool`、`/Applications/MAA.app`、Homebrew 的 `maa`。探测不到就在界面「设置」里手动填绝对路径。
+
+**Q：Mac 上 ADB 连不上？**
+不要套用 Windows 的 `16384 + 32 × 索引`。在 MuMu 菜单「开发者 → 打开 ADB」看端口，填到设置的「ADB 地址」，或留空让程序读 `mumutool info`。文档：<https://www.mumuplayer.com/help/mac/connect-adb.html>
 
 **Q：挂机没开始就结束了？**
 检查 MAA 目录下 `debug\asst.log`。常见原因是 MAA 首次运行尚未初始化（手动启动一次 MAA 完成初始化），
@@ -205,7 +226,10 @@ MuMu 的具体路径一般是 `<安装盘>\Program Files\Netease\MuMu\nx_main\`�
 可以。程序所有路径基于自身所在目录和自动探测，不写死安装位置。用安装包分发最省事。
 
 **Q：为什么窗口关了程序还在跑？**
-这是设计如此——关窗等于最小化到托盘，定时任务继续在后台生效。要真正退出请用托盘菜单或界面里的「退出程序」。
+这是设计如此——关窗后挂机与定时继续在后台生效。Windows 缩到托盘；macOS 暂无菜单栏图标，再次运行 `python3 pipeline.py` 会唤起已有实例。要真正退出请用界面里的「退出程序」（Windows 也可用托盘菜单）。
+
+**Q：Mac 和 Windows 差在哪？**
+同一套阶段 / 多账号 / 定时 / 通知。Mac 用 `mumutool`（不是 `mumu-cli.exe`），MAA 优先走官方 GUI + `gui.new.json` 注入（连接配置为 `CompatMac`）。尚未提供 dmg 安装包，托盘图标不对等。不要把 Windows 的 `pipeline_config.json` 原样拷到 Mac（路径无效）；程序会在路径失效时重新探测。
 
 **Q：怎么一次挂多个账号？**
 在设置里「多账号」添加账号，填显示名和 MAA 能用来匹配的登录名片段，保持启用，保存后再点一键挂机。

@@ -11,8 +11,11 @@ const SAMPLE = {
   mumu: "未知", adb: "未知", maa: "未运行", task: "—", server: "http://127.0.0.1:17800",
   phases: {},
   config_summary: {
+    platform: "windows", platform_label: "Windows",
     vm_index: 0, adb_address: "", ready_timeout: 180, shutdown_after_complete: true,
     close_manager: true,
+    mumu_cli: "C:\\Program Files\\Netease\\MuMu\\nx_main\\mumu-cli.exe",
+    mumu_adb: "C:\\Program Files\\Netease\\MuMu\\nx_main\\adb.exe",
     maa_exe: "C:\\MAA\\MAA.exe", maa_profile: "挂机流水线",
     maa_close_after_complete: true, maa_close_delay: 10,
     accounts: [
@@ -126,6 +129,8 @@ setTimeout(() => {
   console.log("=== 5. 往返一致性：收集 → 回填 → 再收集 ===");
   const round = JSON.parse(JSON.stringify(out));
   round.vm_index = out.mumu.vm_index;
+  round.mumu_cli = out.mumu.cli;
+  round.mumu_adb = out.mumu.adb;
   round.adb_address = out.mumu.adb_address;
   round.ready_timeout = out.mumu.ready_timeout;
   round.shutdown_after_complete = out.mumu.shutdown_after_complete;
